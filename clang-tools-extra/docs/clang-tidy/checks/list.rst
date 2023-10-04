@@ -82,7 +82,7 @@ Clang-Tidy Checks
    :doc:`bugprone-bad-signal-to-kill-thread <bugprone/bad-signal-to-kill-thread>`,
    :doc:`bugprone-bool-pointer-implicit-conversion <bugprone/bool-pointer-implicit-conversion>`, "Yes"
    :doc:`bugprone-branch-clone <bugprone/branch-clone>`,
-   :doc:`bugprone-compare-pointer-to-member-virtual-function <bugprone/compare-pointer-to-member-virtual-function>`, "Yes"
+   :doc:`bugprone-compare-pointer-to-member-virtual-function <bugprone/compare-pointer-to-member-virtual-function>`,
    :doc:`bugprone-copy-constructor-init <bugprone/copy-constructor-init>`, "Yes"
    :doc:`bugprone-dangling-handle <bugprone/dangling-handle>`,
    :doc:`bugprone-dynamic-static-initializers <bugprone/dynamic-static-initializers>`,
@@ -316,6 +316,7 @@ Clang-Tidy Checks
    :doc:`performance-inefficient-algorithm <performance/inefficient-algorithm>`, "Yes"
    :doc:`performance-inefficient-string-concatenation <performance/inefficient-string-concatenation>`,
    :doc:`performance-inefficient-vector-operation <performance/inefficient-vector-operation>`, "Yes"
+   :doc:`performance-missing-moves <performance/missing-moves>`, "Yes"
    :doc:`performance-move-const-arg <performance/move-const-arg>`, "Yes"
    :doc:`performance-move-constructor-init <performance/move-constructor-init>`,
    :doc:`performance-no-automatic-move <performance/no-automatic-move>`,

@@ -17,6 +17,7 @@
 #include "InefficientAlgorithmCheck.h"
 #include "InefficientStringConcatenationCheck.h"
 #include "InefficientVectorOperationCheck.h"
+#include "MissingMovesCheck.h"
 #include "MoveConstArgCheck.h"
 #include "MoveConstructorInitCheck.h"
 #include "NoAutomaticMoveCheck.h"
@@ -49,6 +50,8 @@ public:
         "performance-inefficient-string-concatenation");
     CheckFactories.registerCheck<InefficientVectorOperationCheck>(
         "performance-inefficient-vector-operation");
+    CheckFactories.registerCheck<MissingMovesCheck>(
+        "performance-missing-moves");
     CheckFactories.registerCheck<MoveConstArgCheck>(
         "performance-move-const-arg");
     CheckFactories.registerCheck<MoveConstructorInitCheck>(

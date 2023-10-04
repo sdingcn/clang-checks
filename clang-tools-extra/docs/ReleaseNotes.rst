@@ -174,6 +174,11 @@ New checks
   Recommends the smallest possible underlying type for an ``enum`` or ``enum``
   class based on the range of its enumerators.
 
+- New :doc:`performance-missing-moves
+  <clang-tidy/checks/performance/missing-moves>` check.
+
+  FIXME: add release notes.
+
 - New :doc:`readability-reference-to-constructed-temporary
   <clang-tidy/checks/readability/reference-to-constructed-temporary>` check.
 
