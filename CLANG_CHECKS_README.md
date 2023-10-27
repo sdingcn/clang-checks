@@ -1,8 +1,10 @@
-# Checks based on clang-tidy
+# clang-checks
 
-## Overview
+This repository contains two C++ checks based on clang.
 
-This repository contains the performance-missing-move check based on clang-tidy,
+## performance-missing-move
+
+The performance-missing-move check is based on clang-tidy,
 which checks C++ code for cases where objects are copied but
 those copies are unnecessary. In those cases
 it's better to use `std::move` to trigger the move constructors or
@@ -21,7 +23,7 @@ for (int x : v) cout << x << endl;
 return;
 ```
 
-## Source
+### source
 
 The source code of this check is in the following files.
 ```
@@ -29,7 +31,7 @@ clang-tools-extra/clang-tidy/performance/MissingMovesCheck.h
 clang-tools-extra/clang-tidy/performance/MissingMovesCheck.cpp
 ```
 
-## Build
+### build
 
 ```
 mkdir build
@@ -38,9 +40,9 @@ cmake -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" -DCMAKE_BUILD_TYPE=Releas
 make -j8
 ```
 
-## Run
+### run
 
-### Run the check on a single C++ source file
+#### Run the check on a single C++ source file
 
 ```
 build/bin/clang-tidy test.cc -checks="-*,performance-missing-moves" --
@@ -48,7 +50,7 @@ build/bin/clang-tidy test.cc -checks="-*,performance-missing-moves" --
 
 Note: You may need to include library paths after the `--`.
 
-### Run the check on a cmake-based C++ project
+#### Run the check on a cmake-based C++ project
 
 First run `cmake` using the option `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` to generate
 the corresponding `compile_commands.json` file.
@@ -70,5 +72,11 @@ where blindly applying all fixings might introduce errors (it is related to func
 resolution), so it is discouraged to apply all fixings blindly and it is recommended to manually
 check each place.
 
-## Official document of clang-tidy
+### official document of clang-tidy
 https://clang.llvm.org/extra/clang-tidy/
+
+## concept-synth
+
+The concept-synth check is based on clang's RecursiveASTVisitor,
+which scans all function templates and synthesize concepts (C++20) for them
+based on (1) the template body and (2) the instantiations.
