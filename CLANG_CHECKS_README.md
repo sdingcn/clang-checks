@@ -44,7 +44,7 @@ clang-tools-extra/clang-tidy/performance/MissingMovesCheck.cpp
 #### Run the check on a single C++ source file
 
 ```
-build/bin/clang-tidy test.cc -checks="-*,performance-missing-moves" --
+build/bin/clang-tidy extra-files/test.cc -checks="-*,performance-missing-moves" --
 ```
 
 Note: You may need to include library paths after the `--`.
@@ -90,11 +90,20 @@ clang-tools-extra/concept-synth/ConceptSynth.cpp
 #### Run the check on a single C++ source file
 
 ```
-build/bin/concept-synth test.cc --
+build/bin/concept-synth extra-files/test.cc --
 ```
 
 Note: You may need to include library paths after the `--`.
 
 #### Run the check on a C++ project
 
-TODO
+First generate the `compile_commands.json` file.
+For example, if the project is based on CMake,
+you can run `cmake` using the option `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`
+to generate the corresponding `compile_commands.json` file.
+
+Then use the following command to run the check
+on the entire C++ project.
+```
+python3 extra-files/run-concept-synth.py <path-to-the-build-folder-of-the-C++-project>
+```
