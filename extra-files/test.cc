@@ -20,10 +20,21 @@ struct ID {
     ID operator * (const ID &id) { return ID(); }
 };
 
+void h(int x) {}
+
+template <typename T>
+void g(T x) {
+    T y(x);
+    x + 1;
+    x = 1;
+    f(x);
+    h(x);
+}
+
 int main() {
     n::m::C c1, c2;
     c1 = c2;
-    f(5);
+    f(1);
     f(10LL);
     f(0.5);
     f(ID());

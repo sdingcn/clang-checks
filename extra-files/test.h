@@ -8,4 +8,9 @@ T f(T x) {
     return r;
 }
 
+template <>
+int f<int>(int x) {
+    return 0;
+}
+
 #endif
