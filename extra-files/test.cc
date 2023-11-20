@@ -21,14 +21,22 @@ struct ID {
 };
 
 void h(int x) {}
+void h(long long x) {}
 
 template <typename T>
 void g(T x) {
     T y(x);
     x + 1;
     x = 1;
+    x++;
     f(x);
     h(x);
+}
+
+template <typename T>
+void obj(T x) {
+    x.f;
+    x.dump();
 }
 
 int main() {

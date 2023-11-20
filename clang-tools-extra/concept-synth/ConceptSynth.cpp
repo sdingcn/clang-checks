@@ -98,7 +98,9 @@ public:
     FullSourceLoc fullLocation =
         context->getFullLoc(declaration->getBeginLoc());
     if (fullLocation.isValid())
-      llvm::outs() << "Found function template declaration at "
+      llvm::outs() << "Found function template declaration "
+                   << declaration->getNameAsString()
+                   << " at "
                    << WriteFullSourceLocation(fullLocation)
                    << "\n";
     TraverseFunctionTemplateVisitor visitor(context, declaration->getTemplateParameters());
@@ -116,7 +118,19 @@ public:
     for (auto varUseExpr : visitor.varUseExprs) {
       llvm::outs() << "\t";
       llvm::outs() << varUseExpr.var->getDecl()->getNameAsString() << " in "
-                   << varUseExpr.expr->getStmtClassName() << "\n";
+                   << varUseExpr.expr->getStmtClassName() << " ";
+      if (auto unaryOp = dyn_cast<UnaryOperator>(varUseExpr.expr)) {
+        llvm::outs() << unaryOp->getOpcodeStr(unaryOp->getOpcode());
+      } else if (auto binaryOp = dyn_cast<BinaryOperator>(varUseExpr.expr)) {
+        llvm::outs() << binaryOp->getOpcodeStr(binaryOp->getOpcode());
+      } else if (auto callExpr = dyn_cast<CallExpr>(varUseExpr.expr)) {
+        if (auto namedCallee = dyn_cast<UnresolvedLookupExpr>(callExpr->getCallee())) {
+          llvm::outs() << "with named callee " << namedCallee->getName().getAsString();
+        }
+      } else if (auto dependentMemberExpr = dyn_cast<CXXDependentScopeMemberExpr>(varUseExpr.expr)) {
+        llvm::outs() << dependentMemberExpr->getMemberNameInfo().getAsString();
+      }
+      llvm::outs() << "\n";
     }
     return true;
   }
