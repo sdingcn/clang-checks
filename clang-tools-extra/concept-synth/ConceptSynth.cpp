@@ -57,7 +57,7 @@ public:
     return true;
   }
   bool VisitDeclRefExpr(DeclRefExpr *expression) {
-    auto t = expression->getType().getUnqualifiedType();
+    auto t = expression->getType();
     if (inTemplateParameterList(t)) {
       const DeclRefExpr &var = *expression;
       auto parents = context->getParents(var);
@@ -80,8 +80,12 @@ private:
   bool inTemplateParameterList(QualType t) {
     int n = tmpList->size();
     for (int i = 0; i < n; i++) {
-      if (tmpList->getParam(i)->getNameAsString() == t.getAsString()) {
-        return true;
+      auto decl = tmpList->getParam(i);
+      if (auto ttpdecl = dyn_cast<TemplateTypeParmDecl>(decl)) {
+        auto ttpt = context->getTypeDeclType(ttpdecl);
+        if (context->hasSameType(ttpt, t)) {
+          return true;
+        }
       }
     }
     return false;
