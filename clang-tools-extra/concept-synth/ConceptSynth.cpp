@@ -10,7 +10,10 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "llvm/Support/CommandLine.h"
 #include <vector>
+#include <unordered_set>
+#include <unordered_map>
 #include <string>
+#include <utility>
 #include <sstream>
 
 using namespace clang;
@@ -41,6 +44,7 @@ std::string WriteFullSourceLocation(FullSourceLoc fullSourceLocation) {
 }
 
 struct VariableUseExpression {
+  const TemplateTypeParmDecl *ttpdecl;
   const DeclRefExpr *var;
   const Expr *expr;
 };
@@ -58,13 +62,14 @@ public:
   }
   bool VisitDeclRefExpr(DeclRefExpr *expression) {
     auto t = expression->getType();
-    if (inTemplateParameterList(t)) {
+    if (auto ttpdecl = getTemplateTypeParmDecl(t)) {
       const DeclRefExpr &var = *expression;
       auto parents = context->getParents(var);
       for (auto it = parents.begin(); it != parents.end(); it++) {
         const Expr *expr = it->get<Expr>();
         if (expr) {
           VariableUseExpression vue;
+          vue.ttpdecl = ttpdecl;
           vue.var = expression;
           vue.expr = expr;
           varUseExprs.push_back(vue);
@@ -77,21 +82,32 @@ public:
   std::vector<const TemplateArgumentList *> argLists;
   std::vector<VariableUseExpression> varUseExprs;
 private:
-  bool inTemplateParameterList(QualType t) {
+  TemplateTypeParmDecl *getTemplateTypeParmDecl(QualType t) {
     int n = tmpList->size();
     for (int i = 0; i < n; i++) {
       auto decl = tmpList->getParam(i);
       if (auto ttpdecl = dyn_cast<TemplateTypeParmDecl>(decl)) {
         auto ttpt = context->getTypeDeclType(ttpdecl);
         if (context->hasSameType(ttpt, t)) {
-          return true;
+          return ttpdecl;
         }
       }
     }
-    return false;
+    return nullptr;
   }
   ASTContext *context;
   TemplateParameterList *tmpList;
+};
+
+struct Constraint {
+  std::string category;
+  std::string name;
+  int position;
+  Constraint(const std::string &c, const std::string &n, int p)
+    : category(c), name(n), position(p) {}
+  std::string str() {
+    return "(" + category + ", " + name + ", " + std::to_string(position) + ")";
+  }
 };
 
 class FindTargetVisitor : public RecursiveASTVisitor<FindTargetVisitor> {
@@ -99,6 +115,7 @@ public:
   explicit FindTargetVisitor(ASTContext *context) : context(context) {}
 
   bool VisitFunctionTemplateDecl(FunctionTemplateDecl *declaration) {
+
     FullSourceLoc fullLocation =
         context->getFullLoc(declaration->getBeginLoc());
     if (fullLocation.isValid())
@@ -107,35 +124,87 @@ public:
                    << " at "
                    << WriteFullSourceLocation(fullLocation)
                    << "\n";
+
     TraverseFunctionTemplateVisitor visitor(context, declaration->getTemplateParameters());
     visitor.TraverseDecl(declaration);
-    llvm::outs() << "[Instantiations]\n";
+
+    std::vector<std::vector<std::string>> instantiations;
     for (auto argList : visitor.argLists) {
-      llvm::outs() << "\t";
+      std::vector<std::string> insta;
       int n = argList->size();
       for (int i = 0; i < n; i++) {
-        llvm::outs() << (*argList)[i].getAsType().getAsString() << ' ';
+        insta.push_back((*argList)[i].getAsType().getAsString());
       }
-      llvm::outs() << "\n";
+      instantiations.push_back(std::move(insta));
     }
-    llvm::outs() << "[Template Body]\n";
+
+    std::unordered_map<std::string, std::vector<Constraint>> constraint_map;
+    std::unordered_map<std::string, std::unordered_set<std::string>> dedup;
     for (auto varUseExpr : visitor.varUseExprs) {
-      llvm::outs() << "\t";
-      llvm::outs() << varUseExpr.var->getDecl()->getNameAsString() << " in "
-                   << varUseExpr.expr->getStmtClassName() << " ";
+      std::string type = varUseExpr.ttpdecl->getNameAsString();
+      std::string category;
+      std::string name;
+      int position = -1;
       if (auto unaryOp = dyn_cast<UnaryOperator>(varUseExpr.expr)) {
-        llvm::outs() << unaryOp->getOpcodeStr(unaryOp->getOpcode());
+        category = "UnaryOperator";
+        name = unaryOp->getOpcodeStr(unaryOp->getOpcode());
+        position = 0;
       } else if (auto binaryOp = dyn_cast<BinaryOperator>(varUseExpr.expr)) {
-        llvm::outs() << binaryOp->getOpcodeStr(binaryOp->getOpcode());
+        category = "BinaryOperator";
+        name = binaryOp->getOpcodeStr(binaryOp->getOpcode());
+        if (binaryOp->getLHS() == varUseExpr.var) {
+          position = 0;
+        } else {
+          position = 1;
+        }
       } else if (auto callExpr = dyn_cast<CallExpr>(varUseExpr.expr)) {
         if (auto namedCallee = dyn_cast<UnresolvedLookupExpr>(callExpr->getCallee())) {
-          llvm::outs() << "with named callee " << namedCallee->getName().getAsString();
+          category = "CallExpr";
+          name = namedCallee->getName().getAsString();
+          int i = 0;
+          for (auto node = namedCallee->child_begin(); node != namedCallee->child_end(); node++) {
+            if ((*node) == varUseExpr.var) {
+              position = i;
+              break;
+            }
+            i++;
+          }
+        } else {
+          continue;
         }
       } else if (auto dependentMemberExpr = dyn_cast<CXXDependentScopeMemberExpr>(varUseExpr.expr)) {
-        llvm::outs() << dependentMemberExpr->getMemberNameInfo().getAsString();
+        category = "CXXDependentScopeMemberExpr";
+        name = dependentMemberExpr->getMemberNameInfo().getAsString();
+        position = 0;
+      } else {
+        continue;
       }
-      llvm::outs() << "\n";
+      Constraint con(category, name, position);
+      if (dedup[type].count(con.str()) == 0) {
+        constraint_map[type].push_back(con);
+        dedup[type].insert(con.str());
+      }
     }
+
+    llvm::outs() << "[Instantiations]\n";
+    for (auto &insta : instantiations) {
+      llvm::outs() << '\t';
+      for (auto &type : insta) {
+        llvm::outs() << type << "  ";
+      }
+      llvm::outs() << '\n';
+    }
+
+    llvm::outs() << "[Template Body]\n";
+    for (auto &kv : constraint_map) {
+      llvm::outs() << '\t';
+      llvm::outs() << kv.first << ": ";
+      for (auto &con : kv.second) {
+        llvm::outs() << con.str() << ' ';
+      }
+      llvm::outs() << '\n';
+    }
+
     return true;
   }
 

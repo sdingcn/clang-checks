@@ -1,5 +1,6 @@
 #include "test.h"
 
+#if 0
 namespace n {
 namespace m {
 
@@ -14,11 +15,6 @@ struct C {
 
 }
 }
-
-struct ID {
-    ID operator + (int x) { return ID(); }
-    ID operator * (const ID &id) { return ID(); }
-};
 
 void h(int x) {}
 void h(long long x) {}
@@ -38,12 +34,21 @@ void obj(T x) {
     x.f;
     x.dump();
 }
+#endif
+
+struct ID {
+    ID () {}
+    ID (int x) {}
+    ID operator + (int x) { return ID(); }
+    ID operator + (const ID &id) { return ID(); }
+};
+
 
 int main() {
+/*
     n::m::C c1, c2;
     c1 = c2;
-    f(1);
-    f(10LL);
-    f(0.5);
-    f(ID());
+*/
+    f(1, 1);
+    f(ID(), 0);
 }

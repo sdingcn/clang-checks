@@ -1,16 +1,16 @@
 #ifndef TEST_H
 #define TEST_H
 
-template <typename T>
-T f(T x) {
-    T y = x + 1;
-    T r = y * y;
-    return r;
+template <typename T, typename U>
+T f(T a, U b) {
+    b++;
+    b++;
+    return a + b;
 }
 
 template <>
-int f<int>(int x) {
-    return 0;
+int f<int, int>(int a, int b) {
+    return a * b;
 }
 
 #endif
