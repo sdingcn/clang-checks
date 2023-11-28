@@ -43,6 +43,12 @@ struct ID {
     ID operator + (const ID &id) { return ID(); }
 };
 
+template <typename T>
+struct C {
+    C() {}
+    template <typename U>
+    void g(U x) { return f(x, x); }
+};
 
 int main() {
 /*

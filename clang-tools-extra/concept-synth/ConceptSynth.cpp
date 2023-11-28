@@ -33,7 +33,6 @@ static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 static cl::extrahelp MoreHelp("\nMore help text...\n");
 
 // The core classes
-namespace {
 
 std::string WriteFullSourceLocation(FullSourceLoc fullSourceLocation) {
   std::ostringstream oss;
@@ -99,16 +98,53 @@ private:
   TemplateParameterList *tmpList;
 };
 
+struct Instantiation {
+  Instantiation(const std::string &t)
+    : type(t) {}
+  bool operator== (const Instantiation &other) const {
+    return type == other.type;
+  }
+  std::string str() const {
+    return type;
+  }
+private:
+  std::string type;
+};
+
+template <>
+struct std::hash<Instantiation> {
+  std::size_t operator() (const Instantiation &i) const {
+    return std::hash<std::string>()(i.str());
+  }
+};
+
 struct Constraint {
+  Constraint(const std::string &c, const std::string &n, int p)
+    : category(c), name(n), position(p) {}
+  bool operator== (const Constraint &other) const {
+    return category == other.category && name == other.name && position == other.position;
+  }
+  std::string str() const {
+    return "(" + category + ", " + name + ", " + std::to_string(position) + ")";
+  }
+private:
   std::string category;
   std::string name;
   int position;
-  Constraint(const std::string &c, const std::string &n, int p)
-    : category(c), name(n), position(p) {}
-  std::string str() {
-    return "(" + category + ", " + name + ", " + std::to_string(position) + ")";
+};
+
+template <>
+struct std::hash<Constraint> {
+  std::size_t operator() (const Constraint &c) const {
+    return std::hash<std::string>()(c.str());
   }
 };
+
+std::vector<std::string> infer(
+  const std::unordered_set<Constraint> &constraint_set,
+  const std::unordered_set<Instantiation> &instantiation_set) {
+  return std::vector<std::string>{"TODO"};
+}
 
 class FindTargetVisitor : public RecursiveASTVisitor<FindTargetVisitor> {
 public:
@@ -125,23 +161,24 @@ public:
                    << WriteFullSourceLocation(fullLocation)
                    << "\n";
 
-    TraverseFunctionTemplateVisitor visitor(context, declaration->getTemplateParameters());
+    TemplateParameterList *tmpList = declaration->getTemplateParameters();
+    TraverseFunctionTemplateVisitor visitor(context, tmpList);
     visitor.TraverseDecl(declaration);
 
-    std::vector<std::vector<std::string>> instantiations;
-    for (auto argList : visitor.argLists) {
-      std::vector<std::string> insta;
-      int n = argList->size();
-      for (int i = 0; i < n; i++) {
-        insta.push_back((*argList)[i].getAsType().getAsString());
+    std::unordered_map<const TemplateTypeParmDecl*, std::unordered_set<Instantiation>> instantiation_map;
+    int n = tmpList->size();
+    for (int i = 0; i < n; i++) {
+      auto decl = tmpList->getParam(i);
+      if (auto ttpdecl = dyn_cast<TemplateTypeParmDecl>(decl)) {
+        for (auto argList : visitor.argLists) {
+          Instantiation insta((*argList)[i].getAsType().getAsString());
+          instantiation_map[ttpdecl].insert(insta);
+        }
       }
-      instantiations.push_back(std::move(insta));
     }
 
-    std::unordered_map<std::string, std::vector<Constraint>> constraint_map;
-    std::unordered_map<std::string, std::unordered_set<std::string>> dedup;
+    std::unordered_map<const TemplateTypeParmDecl*, std::unordered_set<Constraint>> constraint_map;
     for (auto varUseExpr : visitor.varUseExprs) {
-      std::string type = varUseExpr.ttpdecl->getNameAsString();
       std::string category;
       std::string name;
       int position = -1;
@@ -162,9 +199,9 @@ public:
           category = "CallExpr";
           name = namedCallee->getName().getAsString();
           int i = 0;
-          for (auto node = namedCallee->child_begin(); node != namedCallee->child_end(); node++) {
+          for (auto node = callExpr->child_begin(); node != callExpr->child_end(); node++) {
             if ((*node) == varUseExpr.var) {
-              position = i;
+              position = i - 1;
               break;
             }
             i++;
@@ -180,27 +217,36 @@ public:
         continue;
       }
       Constraint con(category, name, position);
-      if (dedup[type].count(con.str()) == 0) {
-        constraint_map[type].push_back(con);
-        dedup[type].insert(con.str());
-      }
+      constraint_map[varUseExpr.ttpdecl].insert(con);
     }
 
     llvm::outs() << "[Instantiations]\n";
-    for (auto &insta : instantiations) {
+    for (auto &kv : instantiation_map) {
       llvm::outs() << '\t';
-      for (auto &type : insta) {
-        llvm::outs() << type << "  ";
+      llvm::outs() << kv.first->getNameAsString() << ": ";
+      for (auto &insta : kv.second) {
+        llvm::outs() << insta.str() << ' ';
       }
       llvm::outs() << '\n';
     }
 
-    llvm::outs() << "[Template Body]\n";
+    llvm::outs() << "[Template Body Constraints]\n";
     for (auto &kv : constraint_map) {
       llvm::outs() << '\t';
-      llvm::outs() << kv.first << ": ";
+      llvm::outs() << kv.first->getNameAsString() << ": ";
       for (auto &con : kv.second) {
         llvm::outs() << con.str() << ' ';
+      }
+      llvm::outs() << '\n';
+    }
+
+    llvm::outs() << "[Inferred Named Requirements]\n";
+    for (auto &kv : constraint_map) {
+      llvm::outs() << '\t';
+      llvm::outs() << kv.first->getNameAsString() << ": ";
+      auto candidates = infer(kv.second, instantiation_map[kv.first]);
+      for (auto &cand : candidates) {
+        llvm::outs() << cand << ' ';
       }
       llvm::outs() << '\n';
     }
@@ -232,8 +278,6 @@ public:
     return std::make_unique<ConceptSynthConsumer>(&compiler.getASTContext());
   }
 };
-
-} // namespace
 
 int main(int argc, const char **argv) {
   auto ExpectedParser = CommonOptionsParser::create(argc, argv, MyToolCategory);
