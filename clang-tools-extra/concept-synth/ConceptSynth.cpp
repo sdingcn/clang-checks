@@ -9,12 +9,14 @@
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "llvm/Support/CommandLine.h"
+#include <algorithm>
 #include <vector>
 #include <unordered_set>
 #include <unordered_map>
 #include <string>
 #include <utility>
 #include <sstream>
+#include <tuple>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -140,10 +142,49 @@ struct std::hash<Constraint> {
   }
 };
 
+namespace {
+  // named requirements -> (constraint set, excluded types)
+  std::unordered_map<
+    std::string,
+    std::pair<std::unordered_set<Constraint>, std::unordered_set<Instantiation>>
+  > library = {
+  };
+}
+
+// Later may add support of two or more candidates.
 std::vector<std::string> infer(
   const std::unordered_set<Constraint> &constraint_set,
   const std::unordered_set<Instantiation> &instantiation_set) {
-  return std::vector<std::string>{"TODO"};
+  using Candidate = std::tuple<std::string, int, int>;
+  std::vector<Candidate> candidates;
+  for (const auto &kv : library) {
+    // Instantiations are first used to exclude candidates.
+    bool ok = true;
+    for (const auto &insta : instantiation_set) {
+      if (kv.second.second.count(insta) > 0) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) {
+      // Then do comparison for constraints: coverage > uncoverage
+      int same = 0;
+      for (const auto &con : constraint_set) {
+        if (kv.second.first.count(con) > 0) {
+          same++;
+        }
+      }
+      candidates.push_back(std::make_tuple(kv.first, same, kv.second.first.size() - same));
+    }
+  }
+  std::sort(candidates.begin(), candidates.end(), [](const Candidate &c1, const Candidate &c2) -> bool {
+    if (std::get<1>(c1) > std::get<1>(c2)) {
+      return true;
+    } else {
+      return std::get<2>(c1) > std::get<2>(c2);
+    }
+  });
+  return std::vector<std::string>{candidates.size() > 0 ? std::get<0>(candidates[0]) : "NOTFOUND"};
 }
 
 class FindTargetVisitor : public RecursiveASTVisitor<FindTargetVisitor> {
