@@ -9,6 +9,7 @@
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "llvm/Support/CommandLine.h"
+#include <cstdint>
 #include <algorithm>
 #include <vector>
 #include <unordered_set>
@@ -100,6 +101,7 @@ private:
   TemplateParameterList *tmpList;
 };
 
+// May or may not change the internal representation to QualType
 struct Instantiation {
   Instantiation(const std::string &t)
     : type(t) {}
@@ -123,22 +125,40 @@ struct std::hash<Instantiation> {
 struct Constraint {
   Constraint(const std::string &c, const std::string &n, int p)
     : category(c), name(n), position(p) {}
+  void addDecl(const NamedDecl *decl) {
+    decls.insert(decl);
+  }
   bool operator== (const Constraint &other) const {
-    return category == other.category && name == other.name && position == other.position;
+    return category == other.category &&
+           name == other.name &&
+           decls == other.decls &&
+           position == other.position;
   }
   std::string str() const {
     return "(" + category + ", " + name + ", " + std::to_string(position) + ")";
   }
+  std::string declstr() const {
+    std::vector<const NamedDecl*> declvec(decls.begin(), decls.end());
+    std::sort(declvec.begin(), declvec.end());
+    std::string ret;
+    for (const NamedDecl *p : declvec) {
+      auto i = reinterpret_cast<std::uintptr_t>(p);
+      ret += ":";
+      ret += std::to_string(i);
+    }
+    return ret;
+  }
 private:
   std::string category;
   std::string name;
+  std::unordered_set<const NamedDecl*> decls;
   int position;
 };
 
 template <>
 struct std::hash<Constraint> {
   std::size_t operator() (const Constraint &c) const {
-    return std::hash<std::string>()(c.str());
+    return std::hash<std::string>()(c.str() + c.declstr());
   }
 };
 
@@ -220,45 +240,54 @@ public:
 
     std::unordered_map<const TemplateTypeParmDecl*, std::unordered_set<Constraint>> constraint_map;
     for (auto varUseExpr : visitor.varUseExprs) {
-      std::string category;
-      std::string name;
-      int position = -1;
       if (auto unaryOp = dyn_cast<UnaryOperator>(varUseExpr.expr)) {
-        category = "UnaryOperator";
-        name = unaryOp->getOpcodeStr(unaryOp->getOpcode());
-        position = 0;
+        constraint_map[varUseExpr.ttpdecl].insert(
+          Constraint(
+            std::string("UnaryOperator"),
+            unaryOp->getOpcodeStr(unaryOp->getOpcode()).str(),
+            0
+          )
+        );
       } else if (auto binaryOp = dyn_cast<BinaryOperator>(varUseExpr.expr)) {
-        category = "BinaryOperator";
-        name = binaryOp->getOpcodeStr(binaryOp->getOpcode());
-        if (binaryOp->getLHS() == varUseExpr.var) {
-          position = 0;
-        } else {
-          position = 1;
-        }
+        constraint_map[varUseExpr.ttpdecl].insert(
+          Constraint(
+            std::string("BinaryOperator"),
+            binaryOp->getOpcodeStr(binaryOp->getOpcode()).str(),
+            (binaryOp->getLHS() == varUseExpr.var ? 0 : 1)
+          )
+        );
       } else if (auto callExpr = dyn_cast<CallExpr>(varUseExpr.expr)) {
         if (auto namedCallee = dyn_cast<UnresolvedLookupExpr>(callExpr->getCallee())) {
-          category = "CallExpr";
-          name = namedCallee->getName().getAsString();
-          int i = 0;
-          for (auto node = callExpr->child_begin(); node != callExpr->child_end(); node++) {
-            if ((*node) == varUseExpr.var) {
-              position = i - 1;
+          int position = -1;
+          for (auto nodeptr = callExpr->child_begin(); nodeptr != callExpr->child_end(); nodeptr++) {
+            if ((*nodeptr) == varUseExpr.var) {
               break;
             }
-            i++;
+            position++;
           }
+          Constraint con(
+            std::string("CallExpr"),
+            namedCallee->getName().getAsString(),
+            position
+          );
+          for (auto declptr = namedCallee->decls_begin(); declptr != namedCallee->decls_end(); declptr++) {
+            con.addDecl(*declptr);
+          }
+          constraint_map[varUseExpr.ttpdecl].insert(con);
         } else {
           continue;
         }
       } else if (auto dependentMemberExpr = dyn_cast<CXXDependentScopeMemberExpr>(varUseExpr.expr)) {
-        category = "CXXDependentScopeMemberExpr";
-        name = dependentMemberExpr->getMemberNameInfo().getAsString();
-        position = 0;
+        constraint_map[varUseExpr.ttpdecl].insert(
+          Constraint(
+            std::string("CXXDependentScopeMemberExpr"),
+            dependentMemberExpr->getMemberNameInfo().getAsString(),
+            0
+          )
+        );
       } else {
         continue;
       }
-      Constraint con(category, name, position);
-      constraint_map[varUseExpr.ttpdecl].insert(con);
     }
 
     llvm::outs() << "[Instantiations]\n";

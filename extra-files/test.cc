@@ -34,7 +34,6 @@ void obj(T x) {
     x.f;
     x.dump();
 }
-#endif
 
 struct ID {
     ID () {}
@@ -49,6 +48,7 @@ struct C {
     template <typename U>
     void g(U x) { return f(x, x); }
 };
+#endif
 
 int main() {
 /*
@@ -56,5 +56,4 @@ int main() {
     c1 = c2;
 */
     f(1, 1);
-    f(ID(), 0);
 }
