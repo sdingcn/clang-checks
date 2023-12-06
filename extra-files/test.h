@@ -1,8 +1,8 @@
 #ifndef TEST_H
 #define TEST_H
 
-template <typename T>
-T g(T x) {
+template <typename V>
+V g(V x) {
     return x + 1;
 }
 
@@ -17,7 +17,18 @@ int h(int x) {
 
 template <typename T, typename U>
 T f(T a, U b) {
-    return g(a) / h(b);
+    a++;
+    return g(a) * h(b);
+}
+
+template <typename T>
+T recursion(T x) {
+    if (x <= 1) {
+        return 1;
+    } else {
+        T y = x - 1;
+        return x * recursion(y);
+    }
 }
 
 #endif
