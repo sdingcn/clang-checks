@@ -9,6 +9,7 @@
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "llvm/Support/CommandLine.h"
+
 #include <cstdint>
 #include <algorithm>
 #include <vector>
@@ -20,6 +21,9 @@
 #include <tuple>
 #include <functional>
 #include <variant>
+
+#define DEBUG llvm::errs() << "[*** DEBUG LINE " << std::to_string(__LINE__) << " ***] " << "\n"
+#define PRINT(x) llvm::errs() << "[*** PRINT LINE " << std::to_string(__LINE__) << " ***] " << x << "\n"
 
 using namespace clang;
 using namespace clang::tooling;
@@ -72,6 +76,18 @@ const FunctionTemplateDecl *fromTemplateTypeParmDeclToFunctionTemplateDecl(
     }
   }
   return nullptr;
+}
+
+int getNumberOfRequiredArgs(const FunctionDecl *decl) {
+  int ret = 0;
+  int n = decl->getNumParams();
+  for (int i = 0; i < n; i++) {
+    if (decl->getParamDecl(i)->hasDefaultArg()) {
+      break;
+    }
+    ret++;
+  }
+  return ret;
 }
 
 struct VariableUseExpression {
@@ -314,6 +330,16 @@ public:
   explicit FindTargetVisitor(ASTContext *context) : context(context) {}
 
   bool VisitFunctionTemplateDecl(FunctionTemplateDecl *declaration) {
+    if (declaration->isCXXClassMember() || declaration->isCXXInstanceMember()) {
+      return true;
+    }
+    TemplateParameterList *tmpList = declaration->getTemplateParameters();
+    int len = tmpList->size();
+    for (int i = 0; i < len; i++) {
+      if (tmpList->getParam(i)->isParameterPack()) {
+        return true;
+      }
+    }
 #if 0
     FullSourceLoc fullLocation =
         context->getFullLoc(declaration->getBeginLoc());
@@ -325,7 +351,12 @@ public:
                    << "\n";
 #endif
 
-    TemplateParameterList *tmpList = declaration->getTemplateParameters();
+    for (int i = 0; i < len; i++) {
+      auto decl = tmpList->getParam(i);
+      if (auto ttpdecl = dyn_cast<TemplateTypeParmDecl>(decl)) {
+        constraint_map[ttpdecl].clear();
+      }
+    }
     TraverseFunctionTemplateVisitor visitor(context, tmpList);
     visitor.TraverseDecl(declaration);
 
@@ -342,35 +373,65 @@ public:
           ))
         );
       } else if (auto callExpr = dyn_cast<CallExpr>(varUseExpr.expr)) {
+        if (auto tmp = dyn_cast<CXXOperatorCallExpr>(varUseExpr.expr)) {
+          continue;
+        }
         if (auto namedCallee = dyn_cast<UnresolvedLookupExpr>(callExpr->getCallee())) {
-          int position = -1;
+          int nArgs = callExpr->getNumArgs();
+          int position = 0;
           for (auto nodeptr = callExpr->child_begin(); nodeptr != callExpr->child_end(); nodeptr++) {
-            position++;
             if ((*nodeptr) == varUseExpr.var) {
               break;
             }
+            position++;
           }
+          position--;
           std::vector<CalleeConstraint> ccs;
           for (auto declptr = namedCallee->decls_begin(); declptr != namedCallee->decls_end(); declptr++) {
             auto decl = *declptr;
+            if (decl->isCXXClassMember() || decl->isCXXInstanceMember()) {
+              continue;
+            }
             if (auto ftd = dyn_cast<FunctionTemplateDecl>(decl)) {
-              auto targetTmpList = ftd->getTemplateParameters();
-              auto qt = ftd->getAsFunction()->getParamDecl(position - 1)->getType();
-              if (auto ttpdecl = fromQualTypeToTemplateTypeParmDecl(qt, context, targetTmpList)) {
-                ccs.push_back(ttpdecl);
-              } else {
-                ccs.push_back(qt);
+              TemplateParameterList *targetTmpList = ftd->getTemplateParameters();
+              int targetLen = targetTmpList->size();
+              bool isVariadic = false;
+              for (int i = 0; i < targetLen; i++) {
+                if (targetTmpList->getParam(i)->isParameterPack()) {
+                  isVariadic = true;
+                  break;
+                }
               }
-              for (auto specptr = ftd->spec_begin(); specptr != ftd->spec_end(); specptr++) {
-                auto spec = *specptr;
-                if (!(spec->isTemplateInstantiation())) {
-                  auto qt = spec->getParamDecl(position - 1)->getType();
+              if (isVariadic) {
+                continue;
+              }
+              int l = getNumberOfRequiredArgs(ftd->getAsFunction());
+              int r = ftd->getAsFunction()->getNumParams();
+              if (nArgs >= l && nArgs <= r) {
+                auto qt = ftd->getAsFunction()->getParamDecl(position)->getType();
+                if (auto ttpdecl = fromQualTypeToTemplateTypeParmDecl(qt, context, targetTmpList)) {
+                  ccs.push_back(ttpdecl);
+                } else {
                   ccs.push_back(qt);
+                }
+                for (auto specptr = ftd->spec_begin(); specptr != ftd->spec_end(); specptr++) {
+                  auto spec = *specptr;
+                  if (!(spec->isTemplateInstantiation())) {
+                    auto qt = spec->getParamDecl(position)->getType();
+                    ccs.push_back(qt);
+                  }
                 }
               }
             } else if (auto fd = dyn_cast<FunctionDecl>(decl)) {
-              auto qt = fd->getParamDecl(position - 1)->getType();
-              ccs.push_back(qt);
+              if (fd->isVariadic()) {
+                continue;
+              }
+              int l = getNumberOfRequiredArgs(fd);
+              int r = fd->getNumParams();
+              if (nArgs >= l && nArgs <= r) {
+                auto qt = fd->getParamDecl(position)->getType();
+                ccs.push_back(qt);
+              }
             }
           }
           constraint_map[varUseExpr.ttpdecl].insert(
@@ -384,8 +445,7 @@ public:
       }
     }
 
-    int n = tmpList->size();
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < len; i++) {
       auto decl = tmpList->getParam(i);
       if (auto ttpdecl = dyn_cast<TemplateTypeParmDecl>(decl)) {
         for (auto argList : visitor.argLists) {
@@ -497,11 +557,6 @@ public:
 
   ~Conjunction() {
     // We don't release conjuncts' memory here. Instead, we use a memory pool.
-#if 0
-    for (Formula *f : conjuncts) {
-      delete f;
-    }
-#endif
   }
 
   std::string getAsString() override {
@@ -532,11 +587,6 @@ public:
 
   ~Disjunction() {
     // We don't release disjuncts' memory here. Instead, we use a memory pool.
-#if 0
-    for (Formula *f : disjuncts) {
-      delete f;
-    }
-#endif
   }
 
   std::string getAsString() override {
@@ -563,18 +613,6 @@ public:
 
   virtual void HandleTranslationUnit(clang::ASTContext &context) override {
     visitor.TraverseDecl(context.getTranslationUnitDecl());
-
-#if 0
-    for (const auto &kv : visitor.constraint_map) {
-      llvm::outs() << kv.first->getNameAsString() << ": ";
-      for (const auto &c : kv.second) {
-        if (std::holds_alternative<CallConstraint>(c)) {
-          llvm::outs() << " " << std::get<CallConstraint>(c).to_str();
-        }
-      }
-      llvm::outs() << '\n';
-    }
-#endif
 
     // 0 for not visited, 1 for on stack, 2 for visited
     std::unordered_map<const TemplateTypeParmDecl*, int> status;
@@ -653,12 +691,6 @@ public:
     for (auto p : pool) {
       delete p;
     }
-
-#if 0
-    for (auto &kv : results) {
-      delete kv.second;
-    }
-#endif
 
   }
 

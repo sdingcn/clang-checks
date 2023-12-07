@@ -1,59 +1,46 @@
-#include "test.h"
+namespace NS {
 
-#if 0
-namespace n {
-namespace m {
-
-struct C {
-    C() {}
-    C(const C &c) {}
-    C(C &&c) {}
-    C &operator = (const C &c) { return *this; }
-    C &operator = (C &&c) { return *this; }
-    ~C() {}
-};
-
-}
+template <typename V>
+V g(V x) {
+    return x + 1;
 }
 
-void h(int x) {}
-void h(long long x) {}
+template <>
+int g<int>(int x) {
+    return x - 1;
+}
 
-template <typename T>
-void g(T x) {
-    T y(x);
-    x + 1;
-    x = 1;
-    x++;
-    f(x);
-    h(x);
+int h(int x) {
+    return x * 2;
+}
+
+template <typename T, typename U>
+T f(T a, U b) {
+    a++;
+    return g(a) * h(b);
 }
 
 template <typename T>
-void obj(T x) {
-    x.f;
-    x.dump();
+T recursion(T x) {
+    if (x <= 1) {
+        return 1;
+    } else {
+        T y = x - 1;
+        return x * recursion(y);
+    }
 }
 
-struct ID {
-    ID () {}
-    ID (int x) {}
-    ID operator + (int x) { return ID(); }
-    ID operator + (const ID &id) { return ID(); }
-};
+template <typename Callable>
+void apply(Callable f) {
+    f(0);
+}
 
-template <typename T>
-struct C {
-    C() {}
-    template <typename U>
-    void g(U x) { return f(x, x); }
-};
-#endif
+template <typename ...T>
+void many(T ...x) {
+}
+
+}
 
 int main() {
-/*
-    n::m::C c1, c2;
-    c1 = c2;
-*/
-    f(1, 1);
+    NS::f(1, 1);
 }
