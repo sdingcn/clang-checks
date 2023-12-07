@@ -387,10 +387,12 @@ public:
           }
           position--;
           std::vector<CalleeConstraint> ccs;
+          bool unhandledCandidate = false;
           for (auto declptr = namedCallee->decls_begin(); declptr != namedCallee->decls_end(); declptr++) {
             auto decl = *declptr;
             if (decl->isCXXClassMember() || decl->isCXXInstanceMember()) {
-              continue;
+              unhandledCandidate = true;
+              break;
             }
             if (auto ftd = dyn_cast<FunctionTemplateDecl>(decl)) {
               TemplateParameterList *targetTmpList = ftd->getTemplateParameters();
@@ -403,7 +405,8 @@ public:
                 }
               }
               if (isVariadic) {
-                continue;
+                unhandledCandidate = true;
+                break;
               }
               int l = getNumberOfRequiredArgs(ftd->getAsFunction());
               int r = ftd->getAsFunction()->getNumParams();
@@ -424,7 +427,8 @@ public:
               }
             } else if (auto fd = dyn_cast<FunctionDecl>(decl)) {
               if (fd->isVariadic()) {
-                continue;
+                unhandledCandidate = true;
+                break;
               }
               int l = getNumberOfRequiredArgs(fd);
               int r = fd->getNumParams();
@@ -434,9 +438,12 @@ public:
               }
             }
           }
-          constraint_map[varUseExpr.ttpdecl].insert(
-            Constraint(CallConstraint(ccs))
-          );
+          // Only treat it as a constraint when every case is handled
+          if (!unhandledCandidate) {
+            constraint_map[varUseExpr.ttpdecl].insert(
+              Constraint(CallConstraint(ccs))
+            );
+          }
         }
       } else if (auto dependentMemberExpr = dyn_cast<CXXDependentScopeMemberExpr>(varUseExpr.expr)) {
         constraint_map[varUseExpr.ttpdecl].insert(
@@ -500,13 +507,44 @@ public:
 
   virtual std::string getAsString() { return "(Formula)"; }
 
+  virtual int literalStatus() { return -1; }
+
 };
 
-using AtomicConstraint = std::variant<int, QualType, UnaryConstraint, BinaryConstraint, MemberConstraint>;
+class Literal : public Formula {
+public:
+  Literal(bool v) : value(v) {}
+
+  Literal(const Literal &l) = delete;
+
+  Literal &operator= (const Literal &l) = delete;
+
+  ~Literal() {}
+
+  std::string getAsString() override {
+    if (value) {
+      return "(Literal true)";
+    } else {
+      return "(Literal false)";
+    }
+  }
+
+  int literalStatus() override {
+    if (value) {
+      return 1;
+    } else {
+      return 0;
+    }
+  }
+
+  bool value;
+};
+
+using AtomicConstraint = std::variant<QualType, UnaryConstraint, BinaryConstraint, MemberConstraint>;
 
 class Atomic : public Formula {
 public:
-  Atomic() = default;
+  Atomic(const AtomicConstraint &c) : con(c) {}
 
   Atomic(const Atomic &a) = delete;
 
@@ -515,14 +553,7 @@ public:
   ~Atomic() {}
 
   std::string getAsString() override {
-    if (std::holds_alternative<int>(con)) {
-      int i = std::get<int>(con);
-      if (i == 0) {
-        return "(Atom Const false)";
-      } else {
-        return "(Atom Const true)";
-      }
-    } else if (std::holds_alternative<QualType>(con)) {
+    if (std::holds_alternative<QualType>(con)) {
       QualType t = std::get<QualType>(con);
       return "(Atom Type " + t.getAsString() + ")";
     } else if (std::holds_alternative<UnaryConstraint>(con)) {
@@ -539,11 +570,8 @@ public:
     }
   }
 
-  void setConstraint(const AtomicConstraint &c) {
-    con = c;
-  }
+  int literalStatus() override { return -1; }
 
-private:
   AtomicConstraint con;
 };
 
@@ -569,11 +597,12 @@ public:
     return ret;
   }
 
+  int literalStatus() override { return -1; }
+
   void addConjunct(Formula *f) {
     conjuncts.push_back(f);
   }
 
-private:
   std::vector<Formula*> conjuncts;
 };
 
@@ -599,12 +628,38 @@ public:
     return ret;
   }
 
+  int literalStatus() override { return -1; }
+
   void addDisjunct(Formula *f) {
     disjuncts.push_back(f);
   }
 
-private:
   std::vector<Formula*> disjuncts;
+};
+
+class Pool {
+public:
+  Pool() = default;
+
+  Pool(const Pool &p) = delete;
+
+  Pool &operator= (const Pool &p) = delete;
+
+  ~Pool() {
+    for (auto ptr : pointers) {
+      delete ptr;
+    }
+  }
+
+  template <typename T, typename... Args>
+  T *poolNew(Args&&... args) {
+    auto ptr = new T(std::forward<Args>(args)...);
+    pointers.push_back(ptr);
+    return ptr;
+  }
+
+private:
+  std::vector<Formula*> pointers;
 };
 
 class ConceptSynthConsumer : public clang::ASTConsumer {
@@ -617,54 +672,69 @@ public:
     // 0 for not visited, 1 for on stack, 2 for visited
     std::unordered_map<const TemplateTypeParmDecl*, int> status;
     std::unordered_map<const TemplateTypeParmDecl*, Formula*> results;
-    std::unordered_set<Formula*> pool;
+    Pool pool;
 
     std::function<Formula*(const TemplateTypeParmDecl*)> dfs =
     [&](const TemplateTypeParmDecl *ttpd) -> Formula* {
       if (status[ttpd] == 0) { // not visited
         status[ttpd] = 1;
-        auto conj = new Conjunction();
-        pool.insert(conj);
+        auto conj = pool.poolNew<Conjunction>();
+        bool triviallyFalse = false;
         for (const auto &c : visitor.constraint_map.at(ttpd)) {
           if (std::holds_alternative<UnaryConstraint>(c)) {
-            auto unary = new Atomic();
-            pool.insert(unary);
-            unary->setConstraint(std::get<UnaryConstraint>(c));
+            auto unary = pool.poolNew<Atomic>(std::get<UnaryConstraint>(c));
             conj->addConjunct(unary);
           } else if (std::holds_alternative<BinaryConstraint>(c)) {
-            auto binary = new Atomic();
-            pool.insert(binary);
-            binary->setConstraint(std::get<BinaryConstraint>(c));
+            auto binary = pool.poolNew<Atomic>(std::get<BinaryConstraint>(c));
             conj->addConjunct(binary);
           } else if (std::holds_alternative<CallConstraint>(c)) {
-            auto call = new Disjunction();
-            pool.insert(call);
+            auto disj = pool.poolNew<Disjunction>();
+            bool triviallyTrue = false;
             for (const auto &cc : std::get<CallConstraint>(c).ccs) {
               if (std::holds_alternative<QualType>(cc)) {
-                auto a = new Atomic();
-                pool.insert(a);
-                a->setConstraint(std::get<QualType>(cc));
-                call->addDisjunct(a);
+                auto a = pool.poolNew<Atomic>(std::get<QualType>(cc));
+                disj->addDisjunct(a);
               } else if (std::holds_alternative<const TemplateTypeParmDecl*>(cc)) {
-                auto f = dfs(std::get<const TemplateTypeParmDecl*>(cc));
-                call->addDisjunct(f);
+                if (auto f = dfs(std::get<const TemplateTypeParmDecl*>(cc))) {
+                  if (f->literalStatus() != -1) {
+                    if (f->literalStatus() == 1) {
+                      triviallyTrue = true;
+                      break;
+                    } else {
+                      continue;
+                    }
+                  } else {
+                    disj->addDisjunct(f);
+                  }
+                } else { // recursive dependency
+                  triviallyTrue = true;
+                  break;
+                }
               }
             }
-            conj->addConjunct(call);
+            if (triviallyTrue) {
+              continue;
+            } else if (disj->disjuncts.size() == 0) {
+              triviallyFalse = true;
+              break;
+            } else {
+              conj->addConjunct(disj);
+            }
           } else if (std::holds_alternative<MemberConstraint>(c)) {
-            auto member = new Atomic();
-            pool.insert(member);
-            member->setConstraint(std::get<MemberConstraint>(c));
+            auto member = pool.poolNew<Atomic>(std::get<MemberConstraint>(c));
             conj->addConjunct(member);
           }
         }
         status[ttpd] = 2;
-        return results[ttpd] = conj;
+        if (triviallyFalse) {
+          return results[ttpd] = pool.poolNew<Literal>(false);
+        } else if (conj->conjuncts.size() == 0) {
+          return results[ttpd] = pool.poolNew<Literal>(true);
+        } else {
+          return results[ttpd] = conj;
+        }
       } else if (status[ttpd] == 1) { // on stack
-        auto t = new Atomic();
-        pool.insert(t);
-        t->setConstraint(1);
-        return t;
+        return nullptr;
       } else { // visited
         return results.at(ttpd);
       }
@@ -686,10 +756,6 @@ public:
         llvm::outs() << ftd->getNameAsString() << " " << ttpd->getNameAsString() << ": ";
         llvm::outs() << kv.second->getAsString() << '\n';
       }
-    }
-
-    for (auto p : pool) {
-      delete p;
     }
 
   }
