@@ -278,53 +278,6 @@ struct std::hash<MemberConstraint> {
 
 using Constraint = std::variant<UnaryConstraint, BinaryConstraint, CallConstraint, MemberConstraint>;
 
-#if 0
-namespace {
-  // named requirements -> (constraint set, excluded types)
-  std::unordered_map<
-    std::string,
-    std::pair<std::unordered_set<Constraint>, std::unordered_set<Instantiation>>
-  > library = {
-  };
-}
-
-// Later may add support of two or more candidates.
-std::vector<std::string> infer(
-  const std::unordered_set<Constraint> &constraint_set,
-  const std::unordered_set<Instantiation> &instantiation_set) {
-  using Candidate = std::tuple<std::string, int, int>;
-  std::vector<Candidate> candidates;
-  for (const auto &kv : library) {
-    // Instantiations are first used to exclude candidates.
-    bool ok = true;
-    for (const auto &insta : instantiation_set) {
-      if (kv.second.second.count(insta) > 0) {
-        ok = false;
-        break;
-      }
-    }
-    if (ok) {
-      // Then do comparison for constraints: coverage > uncoverage
-      int same = 0;
-      for (const auto &con : constraint_set) {
-        if (kv.second.first.count(con) > 0) {
-          same++;
-        }
-      }
-      candidates.push_back(std::make_tuple(kv.first, same, kv.second.first.size() - same));
-    }
-  }
-  std::sort(candidates.begin(), candidates.end(), [](const Candidate &c1, const Candidate &c2) -> bool {
-    if (std::get<1>(c1) > std::get<1>(c2)) {
-      return true;
-    } else {
-      return std::get<2>(c1) > std::get<2>(c2);
-    }
-  });
-  return std::vector<std::string>{candidates.size() > 0 ? std::get<0>(candidates[0]) : "NOTFOUND"};
-}
-#endif
-
 class FindTargetVisitor : public RecursiveASTVisitor<FindTargetVisitor> {
 public:
   explicit FindTargetVisitor(ASTContext *context) : context(context) {}
@@ -505,9 +458,17 @@ public:
 
   virtual ~Formula() {}
 
-  virtual std::string getAsString() { return "(Formula)"; }
+  virtual std::string getAsString() const {
+    return "(Formula)";
+  }
 
-  virtual int literalStatus() { return -1; }
+  virtual int literalStatus() const {
+    return -1;
+  }
+
+  virtual bool evaluate(const std::function<bool(const Constraint&)> &has_constraint) const {
+    return false;
+  }
 
 };
 
@@ -519,9 +480,9 @@ public:
 
   Literal &operator= (const Literal &l) = delete;
 
-  ~Literal() {}
+  ~Literal() override {}
 
-  std::string getAsString() override {
+  std::string getAsString() const override {
     if (value) {
       return "(Literal true)";
     } else {
@@ -529,12 +490,16 @@ public:
     }
   }
 
-  int literalStatus() override {
+  int literalStatus() const override {
     if (value) {
       return 1;
     } else {
       return 0;
     }
+  }
+
+  bool evaluate(const std::function<bool(const Constraint&)> &has_constraint) const override {
+    return value;
   }
 
   bool value;
@@ -550,9 +515,9 @@ public:
 
   Atomic &operator= (const Atomic &a) = delete;
 
-  ~Atomic() {}
+  ~Atomic() override {}
 
-  std::string getAsString() override {
+  std::string getAsString() const override {
     if (std::holds_alternative<QualType>(con)) {
       QualType t = std::get<QualType>(con);
       return "(Atom Type " + t.getAsString() + ")";
@@ -562,15 +527,30 @@ public:
     } else if (std::holds_alternative<BinaryConstraint>(con)) {
       BinaryConstraint b = std::get<BinaryConstraint>(con);
       return "(Atom Binary " + b.op + " " + std::to_string(b.pos) + ")";
-    } else if (std::holds_alternative<MemberConstraint>(con)) {
+    } else {
       MemberConstraint m = std::get<MemberConstraint>(con);
       return "(Atom Member " + m.mb + ")";
-    } else {
-      return "(Atom)";
     }
   }
 
-  int literalStatus() override { return -1; }
+  int literalStatus() const override {
+    return -1;
+  }
+
+  bool evaluate(const std::function<bool(const Constraint&)> &has_constraint) const override {
+    if (std::holds_alternative<QualType>(con)) {
+      return false;
+    } else if (std::holds_alternative<UnaryConstraint>(con)) {
+      UnaryConstraint u = std::get<UnaryConstraint>(con);
+      return has_constraint(u);
+    } else if (std::holds_alternative<BinaryConstraint>(con)) {
+      BinaryConstraint b = std::get<BinaryConstraint>(con);
+      return has_constraint(b);
+    } else {
+      MemberConstraint m = std::get<MemberConstraint>(con);
+      return has_constraint(m);
+    }
+  }
 
   AtomicConstraint con;
 };
@@ -583,11 +563,11 @@ public:
 
   Conjunction &operator= (const Conjunction &c) = delete;
 
-  ~Conjunction() {
+  ~Conjunction() override {
     // We don't release conjuncts' memory here. Instead, we use a memory pool.
   }
 
-  std::string getAsString() override {
+  std::string getAsString() const override {
     std::string ret = "(and";
     for (Formula *f : conjuncts) {
       ret += " ";
@@ -597,7 +577,17 @@ public:
     return ret;
   }
 
-  int literalStatus() override { return -1; }
+  int literalStatus() const override {
+    return -1;
+  }
+
+  bool evaluate(const std::function<bool(const Constraint&)> &has_constraint) const override {
+    bool ret = true;
+    for (auto f : conjuncts) {
+      ret = ret && (f->evaluate(has_constraint));
+    }
+    return ret;
+  }
 
   void addConjunct(Formula *f) {
     conjuncts.push_back(f);
@@ -614,11 +604,11 @@ public:
 
   Disjunction &operator= (const Disjunction &d) = delete;
 
-  ~Disjunction() {
+  ~Disjunction() override {
     // We don't release disjuncts' memory here. Instead, we use a memory pool.
   }
 
-  std::string getAsString() override {
+  std::string getAsString() const override {
     std::string ret = "(or";
     for (Formula *f : disjuncts) {
       ret += " ";
@@ -628,7 +618,17 @@ public:
     return ret;
   }
 
-  int literalStatus() override { return -1; }
+  int literalStatus() const override {
+    return -1;
+  }
+
+  bool evaluate(const std::function<bool(const Constraint&)> &has_constraint) const override {
+    bool ret = false;
+    for (auto f : disjuncts) {
+      ret = ret || (f->evaluate(has_constraint));
+    }
+    return ret;
+  }
 
   void addDisjunct(Formula *f) {
     disjuncts.push_back(f);
@@ -661,6 +661,39 @@ public:
 private:
   std::vector<Formula*> pointers;
 };
+
+
+namespace {
+  // named requirements ->
+  // (has_constraint, has_instantiation)
+  std::unordered_map<
+    std::string,
+    std::pair<std::function<bool(const Constraint&)>, std::function<bool(const Instantiation&)>>
+  > library = {
+  };
+}
+
+// Later may add support of two or more named requirements.
+std::vector<std::string> infer(
+  const Formula *formula,
+  const std::unordered_set<Instantiation> &instantiation_set) {
+  std::vector<std::string> requirements;
+  for (const auto &[key, value] : library) {
+    const auto &[constraint_predicate, instantiation_predicate] = value;
+    bool ok1 = formula->evaluate(constraint_predicate);
+    bool ok2 = true;
+    for (const auto &i : instantiation_set) {
+      if (!instantiation_predicate(i)) {
+        ok2 = false;
+        break;
+      }
+    }
+    if (ok1 && ok2) {
+      requirements.push_back(key);
+    }
+  }
+  return requirements;
+}
 
 class ConceptSynthConsumer : public clang::ASTConsumer {
 public:
@@ -747,14 +780,19 @@ public:
       }
     }
 
-    llvm::outs() << "[Template Body Constraints]\n";
     for (const auto &kv : results) {
-      llvm::outs() << '\t';
       auto ttpd = kv.first;
+      auto f = kv.second;
       auto ftd = fromTemplateTypeParmDeclToFunctionTemplateDecl(ttpd, &context);
       if (ftd) {
-        llvm::outs() << ftd->getNameAsString() << " " << ttpd->getNameAsString() << ": ";
-        llvm::outs() << kv.second->getAsString() << '\n';
+        llvm::outs() << "[" << ftd->getNameAsString() << ", " << ttpd->getNameAsString() << "]\n";
+        llvm::outs() << "\tRaw constraint: " << f->getAsString() << '\n';
+        llvm::outs() << "\tInferred constraint:";
+        const auto &inferred = infer(f, visitor.instantiation_map[ttpd]);
+        for (const auto &con : inferred) {
+          llvm::outs() << " " << con;
+        }
+        llvm::outs() << "\n";
       }
     }
 
