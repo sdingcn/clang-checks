@@ -329,7 +329,13 @@ public:
         if (auto tmp = dyn_cast<CXXOperatorCallExpr>(varUseExpr.expr)) {
           continue;
         }
-        if (auto namedCallee = dyn_cast<UnresolvedLookupExpr>(callExpr->getCallee())) {
+        if (auto callableParam = dyn_cast<DeclRefExpr>(callExpr->getCallee())) {
+          if (callableParam == varUseExpr.var) {
+            constraint_map[varUseExpr.ttpdecl].insert(
+              UnaryConstraint("Callable", 0)
+            );
+          }
+        } else if (auto namedCallee = dyn_cast<UnresolvedLookupExpr>(callExpr->getCallee())) {
           int nArgs = callExpr->getNumArgs();
           int position = 0;
           for (auto nodeptr = callExpr->child_begin(); nodeptr != callExpr->child_end(); nodeptr++) {
@@ -750,6 +756,8 @@ public:
             } else if (disj->disjuncts.size() == 0) {
               triviallyFalse = true;
               break;
+            } else if (disj->disjuncts.size() == 1) {
+              conj->addConjunct(disj->disjuncts[0]);
             } else {
               conj->addConjunct(disj);
             }
@@ -763,6 +771,8 @@ public:
           return results[ttpd] = pool.poolNew<Literal>(false);
         } else if (conj->conjuncts.size() == 0) {
           return results[ttpd] = pool.poolNew<Literal>(true);
+        } else if (conj->conjuncts.size() == 1) {
+          return results[ttpd] = conj->conjuncts[0];
         } else {
           return results[ttpd] = conj;
         }

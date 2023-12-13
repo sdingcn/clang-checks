@@ -17,6 +17,7 @@ int h(int x) {
 template <typename T, typename U>
 T f(T a, U b) {
     a++;
+    h(0);
     return g(a) * h(b);
 }
 
