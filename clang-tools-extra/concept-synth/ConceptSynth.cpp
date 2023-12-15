@@ -186,25 +186,26 @@ struct std::hash<UnaryConstraint> {
 };
 
 struct BinaryConstraint {
-  BinaryConstraint(std::string o, int p)
-    : op(std::move(o)), pos(p) {}
+  BinaryConstraint(std::string o, int p, std::string t)
+    : op(std::move(o)), pos(p), otherType(t) {}
 
   bool operator== (const BinaryConstraint &other) const {
-    return op == other.op && pos == other.pos;
+    return op == other.op && pos == other.pos && otherType == other.otherType;
   }
 
   std::string to_str() const {
-    return "[BinaryCon " + op + ' ' + std::to_string(pos) + "]";
+    return "[BinaryCon " + op + ' ' + std::to_string(pos) + ' ' + otherType + "]";
   }
 
   std::string op;
   int pos;
+  std::string otherType;
 };
 
 template <>
 struct std::hash<BinaryConstraint> {
   std::size_t operator() (const BinaryConstraint &c) const {
-    return std::hash<std::string>()(c.op + " " + std::to_string(c.pos));
+    return std::hash<std::string>()(c.op + " " + std::to_string(c.pos) + " " + c.otherType);
   }
 };
 
@@ -316,13 +317,26 @@ public:
     for (auto varUseExpr : visitor.varUseExprs) {
       if (auto unaryOp = dyn_cast<UnaryOperator>(varUseExpr.expr)) {
         constraint_map[varUseExpr.ttpdecl].insert(
-          Constraint(UnaryConstraint(unaryOp->getOpcodeStr(unaryOp->getOpcode()).str(), 0))
+          Constraint(UnaryConstraint(unaryOp->getOpcodeStr(unaryOp->getOpcode()).str(),
+            ((unaryOp->isPostfix()) ? 0 : 1)
+          ))
         );
       } else if (auto binaryOp = dyn_cast<BinaryOperator>(varUseExpr.expr)) {
+        std::string otherType;
+        auto e = (binaryOp->getLHS() == varUseExpr.var ? binaryOp->getRHS()->getType() : binaryOp->getLHS()->getType());
+        if (e->isDependentType()) {
+          continue;
+        }
+        if (auto ttpd = fromQualTypeToTemplateTypeParmDecl(e, context, tmpList)) {
+          otherType = ttpd->getNameAsString();
+        } else {
+          otherType = e.getAsString();
+        }
         constraint_map[varUseExpr.ttpdecl].insert(
           Constraint(BinaryConstraint(
             binaryOp->getOpcodeStr(binaryOp->getOpcode()).str(),
-            (binaryOp->getLHS() == varUseExpr.var ? 0 : 1)
+            (binaryOp->getLHS() == varUseExpr.var ? 0 : 1),
+            otherType
           ))
         );
       } else if (auto callExpr = dyn_cast<CallExpr>(varUseExpr.expr)) {
@@ -476,6 +490,9 @@ public:
     return false;
   }
 
+  virtual std::string printConcept(const std::string &templateTypeParm) const {
+    return "";
+  }
 };
 
 class Literal : public Formula {
@@ -506,6 +523,10 @@ public:
 
   bool evaluate(const std::function<bool(const Constraint&)> &has_constraint) const override {
     return value;
+  }
+
+  std::string printConcept(const std::string &templateTypeParm) const override {
+    return value ? "true" : "false";
   }
 
   bool value;
@@ -558,6 +579,29 @@ public:
     }
   }
 
+  std::string printConcept(const std::string &templateTypeParm) const override {
+    if (std::holds_alternative<QualType>(con)) {
+      QualType t = std::get<QualType>(con);
+      return "std::convertible_to<" + templateTypeParm + ", " + t.getAsString() + ">";
+    } else if (std::holds_alternative<UnaryConstraint>(con)) {
+      UnaryConstraint u = std::get<UnaryConstraint>(con);
+      if (u.op == "Callable") {
+        return "true";
+      } else {
+        std::string e = ((u.pos == 0) ? ("x" + u.op) : (u.op + "x"));
+        return "requires (" + templateTypeParm + " x) { " + e + "; }";
+      }
+    } else if (std::holds_alternative<BinaryConstraint>(con)) {
+      BinaryConstraint b = std::get<BinaryConstraint>(con);
+      std::string e = ((b.pos == 0) ? ("x" + b.op + "y") : ("y" + b.op + "x"));
+      return "requires (" + templateTypeParm + " x, " + b.otherType + " y) { " + e + "; }";
+    } else {
+      // TODO
+      MemberConstraint m = std::get<MemberConstraint>(con);
+      return "true";
+    }
+  }
+
   AtomicConstraint con;
 };
 
@@ -593,6 +637,17 @@ public:
       ret = ret && (f->evaluate(has_constraint));
     }
     return ret;
+  }
+
+  std::string printConcept(const std::string &templateTypeParm) const override {
+    std::string ret;
+    for (auto f : conjuncts) {
+      if (ret != "") {
+        ret += " && ";
+      }
+      ret += f->printConcept(templateTypeParm);
+    }
+    return "(" + ret + ")";
   }
 
   void addConjunct(Formula *f) {
@@ -636,6 +691,17 @@ public:
     return ret;
   }
 
+  std::string printConcept(const std::string &templateTypeParm) const override {
+    std::string ret;
+    for (auto f : disjuncts) {
+      if (ret != "") {
+        ret += " || ";
+      }
+      ret += f->printConcept(templateTypeParm);
+    }
+    return "(" + ret + ")";
+  }
+
   void addDisjunct(Formula *f) {
     disjuncts.push_back(f);
   }
@@ -669,13 +735,49 @@ private:
 };
 
 
-namespace {
+namespace namedrequirements {
+  template <typename T>
+  bool isCon(const Constraint &c, const T &v) {
+    if (std::holds_alternative<T>(c)) {
+      return std::get<T>(c) == v;
+    } else {
+      return false;
+    }
+  }
+  bool iteratorCon(const Constraint &c) {
+    return true;
+  }
+  bool iteratorIn(const Instantiation &i) {
+    return true;
+  }
+  bool forwardIteratorCon(const Constraint &c) {
+    return true;
+  }
+  bool forwardIteratorIn(const Instantiation &i) {
+    return true;
+  }
+  bool bidirectionalIteratorCon(const Constraint &c) {
+    return true;
+  }
+  bool bidirectionalIteratorIn(const Instantiation &i) {
+    return true;
+  }
+  bool randomAccessIteratorCon(const Constraint &c) {
+    return true;
+  }
+  bool randomAccessIteratorIn(const Instantiation &i) {
+    return true;
+  }
   // named requirements ->
   // (has_constraint, has_instantiation)
   std::unordered_map<
     std::string,
     std::pair<std::function<bool(const Constraint&)>, std::function<bool(const Instantiation&)>>
   > library = {
+    {"Iterator", {iteratorCon, iteratorIn}},
+    {"ForwardIterator", {forwardIteratorCon, forwardIteratorIn}},
+    {"BidirectionalIterator", {bidirectionalIteratorCon, bidirectionalIteratorIn}},
+    {"RandomAccessIterator", {randomAccessIteratorCon, randomAccessIteratorIn}}
   };
 }
 
@@ -684,7 +786,8 @@ std::vector<std::string> infer(
   const Formula *formula,
   const std::unordered_set<Instantiation> &instantiation_set) {
   std::vector<std::string> requirements;
-  for (const auto &[key, value] : library) {
+#if 0
+  for (const auto &[key, value] : namedrequirements::library) {
     const auto &[constraint_predicate, instantiation_predicate] = value;
     bool ok1 = formula->evaluate(constraint_predicate);
     bool ok2 = true;
@@ -698,6 +801,7 @@ std::vector<std::string> infer(
       requirements.push_back(key);
     }
   }
+#endif
   return requirements;
 }
 
@@ -797,6 +901,7 @@ public:
       if (ftd) {
         llvm::outs() << "[" << ftd->getNameAsString() << ", " << ttpd->getNameAsString() << "]\n";
         llvm::outs() << "\tRaw constraint: " << f->getAsString() << '\n';
+        llvm::outs() << "\tPrinted code: " << f->printConcept(ttpd->getNameAsString()) << '\n';
         llvm::outs() << "\tInferred constraint:";
         const auto &inferred = infer(f, visitor.instantiation_map[ttpd]);
         for (const auto &con : inferred) {
