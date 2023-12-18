@@ -40,6 +40,14 @@ template <typename ...T>
 void many(T ...x) {
 }
 
+template <typename T>
+void ind(T a) {
+    a[0];
+    a->p;
+    a += 1;
+    a = 0;
+}
+
 }
 
 int main() {

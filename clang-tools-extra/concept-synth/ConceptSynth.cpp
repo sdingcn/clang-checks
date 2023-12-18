@@ -163,7 +163,7 @@ struct std::hash<Instantiation> {
 };
 
 struct UnaryConstraint {
-  UnaryConstraint(std::string o, int p)
+  UnaryConstraint(std::string o, int p = -1)
     : op(std::move(o)), pos(p) {}
 
   bool operator== (const UnaryConstraint &other) const {
@@ -172,6 +172,11 @@ struct UnaryConstraint {
 
   std::string to_str() const {
     return "[UnaryCon " + op + ' ' + std::to_string(pos) + "]";
+  }
+
+  bool match(const UnaryConstraint &other) const {
+    return op == other.op &&
+           (pos == -1 || pos == other.pos);
   }
 
   std::string op;
@@ -186,7 +191,7 @@ struct std::hash<UnaryConstraint> {
 };
 
 struct BinaryConstraint {
-  BinaryConstraint(std::string o, int p, std::string t)
+  BinaryConstraint(std::string o, int p = -1, std::string t = "")
     : op(std::move(o)), pos(p), otherType(t) {}
 
   bool operator== (const BinaryConstraint &other) const {
@@ -195,6 +200,12 @@ struct BinaryConstraint {
 
   std::string to_str() const {
     return "[BinaryCon " + op + ' ' + std::to_string(pos) + ' ' + otherType + "]";
+  }
+
+  bool match(const BinaryConstraint &other) const {
+    return op == other.op &&
+           (pos == -1 || pos == other.pos) &&
+           (otherType == "" || otherType == other.otherType);
   }
 
   std::string op;
@@ -737,36 +748,116 @@ private:
 
 namespace namedrequirements {
   template <typename T>
-  bool isCon(const Constraint &c, const T &v) {
+  bool matchConstraintType(const Constraint &c) {
+    return std::holds_alternative<T>(c);
+  }
+  template <typename T>
+  bool matchConstraintValue(const Constraint &c, const T &pattern) {
     if (std::holds_alternative<T>(c)) {
-      return std::get<T>(c) == v;
+      return pattern.match(std::get<T>(c));
     } else {
       return false;
     }
   }
-  bool iteratorCon(const Constraint &c) {
-    return true;
+  bool iteratorHasConstraint(const Constraint &c) {
+    if (
+      matchConstraintType<UnaryConstraint>(c) ||
+      matchConstraintType<BinaryConstraint>(c)
+    ) {
+      if (
+        matchConstraintValue(c, UnaryConstraint("*", 1)) ||
+        matchConstraintValue(c, UnaryConstraint("++", 1)) ||
+        matchConstraintValue(c, BinaryConstraint("="))
+      ) {
+        return true;
+      } else {
+        return false;
+      }
+    } else {
+      return true;
+    }
   }
-  bool iteratorIn(const Instantiation &i) {
-    return true;
+  bool inputIteratorHasConstraint(const Constraint &c) {
+    if (iteratorHasConstraint(c)) {
+      return true;
+    } else if (
+      matchConstraintType<UnaryConstraint>(c) ||
+      matchConstraintType<BinaryConstraint>(c)
+    ) {
+      if (
+        matchConstraintValue(c, BinaryConstraint("==")) ||
+        matchConstraintValue(c, BinaryConstraint("!=")) ||
+        matchConstraintValue(c, UnaryConstraint("++", 0))
+      ) {
+        return true;
+      } else {
+        return false;
+      }
+    } else {
+      return true;
+    }
   }
-  bool forwardIteratorCon(const Constraint &c) {
-    return true;
+  bool outputIteratorHasConstraint(const Constraint &c) {
+    if (iteratorHasConstraint(c)) {
+      return true;
+    } else if (
+      matchConstraintType<UnaryConstraint>(c) ||
+      matchConstraintType<BinaryConstraint>(c)
+    ) {
+      if (
+        matchConstraintValue(c, UnaryConstraint("++", 0))
+      ) {
+        return true;
+      } else {
+        return false;
+      }
+    } else {
+      return true;
+    }
   }
-  bool forwardIteratorIn(const Instantiation &i) {
-    return true;
+  bool forwardIteratorHasConstraint(const Constraint &c) {
+    return inputIteratorHasConstraint(c);
   }
-  bool bidirectionalIteratorCon(const Constraint &c) {
-    return true;
+  bool bidirectionalIteratorHasConstraint(const Constraint &c) {
+    if (forwardIteratorHasConstraint(c)) {
+      return true;
+    } else if (
+      matchConstraintType<UnaryConstraint>(c) ||
+      matchConstraintType<BinaryConstraint>(c)
+    ) {
+      if (
+        matchConstraintValue(c, UnaryConstraint("--"))
+      ) {
+        return true;
+      } else {
+        return false;
+      }
+    } else {
+      return true;
+    }
   }
-  bool bidirectionalIteratorIn(const Instantiation &i) {
-    return true;
-  }
-  bool randomAccessIteratorCon(const Constraint &c) {
-    return true;
-  }
-  bool randomAccessIteratorIn(const Instantiation &i) {
-    return true;
+  bool randomAccessIteratorHasConstraint(const Constraint &c) {
+    if (bidirectionalIteratorHasConstraint(c)) {
+      return true;
+    } else if (
+      matchConstraintType<UnaryConstraint>(c) ||
+      matchConstraintType<BinaryConstraint>(c)
+    ) {
+      if (
+        matchConstraintValue(c, BinaryConstraint("+")) ||
+        matchConstraintValue(c, BinaryConstraint("-")) ||
+        matchConstraintValue(c, BinaryConstraint("<")) ||
+        matchConstraintValue(c, BinaryConstraint(">")) ||
+        matchConstraintValue(c, BinaryConstraint("<=")) ||
+        matchConstraintValue(c, BinaryConstraint(">="))
+      ) {
+        return true;
+      } else {
+        return false;
+      }
+    } else {
+      return true;
+    }
   }
   // named requirements ->
   // (has_constraint, has_instantiation)
@@ -774,10 +865,18 @@ namespace namedrequirements {
     std::string,
     std::pair<std::function<bool(const Constraint&)>, std::function<bool(const Instantiation&)>>
   > library = {
-    {"Iterator", {iteratorCon, iteratorIn}},
-    {"ForwardIterator", {forwardIteratorCon, forwardIteratorIn}},
-    {"BidirectionalIterator", {bidirectionalIteratorCon, bidirectionalIteratorIn}},
-    {"RandomAccessIterator", {randomAccessIteratorCon, randomAccessIteratorIn}}
+    {"Iterator",
+      {iteratorHasConstraint, [](const Instantiation &i){ return true; }}},
+    {"InputIterator",
+      {inputIteratorHasConstraint, [](const Instantiation &i){ return true; }}},
+    {"OutputIterator",
+      {outputIteratorHasConstraint, [](const Instantiation &i){ return true; }}},
+    {"ForwardIterator",
+      {forwardIteratorHasConstraint, [](const Instantiation &i){ return true; }}},
+    {"BidirectionalIterator",
+      {bidirectionalIteratorHasConstraint, [](const Instantiation &i){ return true; }}},
+    {"RandomAccessIterator",
+      {randomAccessIteratorHasConstraint, [](const Instantiation &i){ return true; }}}
   };
 }
 
@@ -786,9 +885,8 @@ std::vector<std::string> infer(
   const Formula *formula,
   const std::unordered_set<Instantiation> &instantiation_set) {
   std::vector<std::string> requirements;
-#if 0
-  for (const auto &[key, value] : namedrequirements::library) {
-    const auto &[constraint_predicate, instantiation_predicate] = value;
+  for (const auto &[name, predicates] : namedrequirements::library) {
+    const auto &[constraint_predicate, instantiation_predicate] = predicates;
     bool ok1 = formula->evaluate(constraint_predicate);
     bool ok2 = true;
     for (const auto &i : instantiation_set) {
@@ -798,10 +896,9 @@ std::vector<std::string> infer(
       }
     }
     if (ok1 && ok2) {
-      requirements.push_back(key);
+      requirements.push_back(name);
     }
   }
-#endif
   return requirements;
 }
 
