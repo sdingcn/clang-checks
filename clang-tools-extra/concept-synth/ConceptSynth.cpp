@@ -51,6 +51,11 @@ std::string WriteFullSourceLocation(FullSourceLoc fullSourceLocation) {
   return oss.str();
 }
 
+// ignore all sugars, qualifiers, and references
+QualType getCleanType(QualType t) {
+  return t.getCanonicalType().getUnqualifiedType().getNonReferenceType();
+}
+
 const TemplateTypeParmDecl *fromQualTypeToTemplateTypeParmDecl(
   QualType t, ASTContext *context, TemplateParameterList *tmpList) {
   int n = tmpList->size();
@@ -58,7 +63,7 @@ const TemplateTypeParmDecl *fromQualTypeToTemplateTypeParmDecl(
     auto decl = tmpList->getParam(i);
     if (auto ttpdecl = dyn_cast<TemplateTypeParmDecl>(decl)) {
       auto ttpt = context->getTypeDeclType(ttpdecl);
-      if (context->hasSameType(ttpt, t)) {
+      if (context->hasSameType(ttpt, getCleanType(t))) {
         return ttpdecl;
       }
     }
@@ -220,6 +225,59 @@ struct std::hash<BinaryConstraint> {
   }
 };
 
+struct FunctionConstraint {
+  FunctionConstraint(std::vector<std::string> p, std::string r)
+    : parameterTypes(std::move(p)), returnType(std::move(r)) {}
+
+  bool operator== (const FunctionConstraint &other) const {
+    return parameterTypes == other.parameterTypes && returnType == other.returnType;
+  }
+
+  std::string to_str() const {
+    std::string ret = "[FunctionCon";
+    for (const std::string &s : parameterTypes) {
+      ret += ' ';
+      ret += s;
+    }
+    ret += ' ';
+    ret += returnType;
+    ret += ']';
+    return ret;
+  }
+
+  std::vector<std::string> parameterTypes;
+  std::string returnType;
+};
+
+template <>
+struct std::hash<FunctionConstraint> {
+  std::size_t operator() (const FunctionConstraint &c) const {
+    return std::hash<std::string>()(c.to_str());
+  }
+};
+
+struct MemberConstraint {
+  MemberConstraint(std::string m)
+    : mb(std::move(m)) {}
+
+  bool operator== (const MemberConstraint &other) const {
+    return mb == other.mb;
+  }
+
+  std::string to_str() const {
+    return "[MemberCon " + mb + "]";
+  }
+
+  std::string mb;
+};
+
+template <>
+struct std::hash<MemberConstraint> {
+  std::size_t operator() (const MemberConstraint &c) const {
+    return std::hash<std::string>()(c.mb);
+  }
+};
+
 using CalleeConstraint = std::variant<QualType, const TemplateTypeParmDecl*>;
 
 struct CallConstraint {
@@ -266,29 +324,7 @@ struct std::hash<CallConstraint> {
   }
 };
 
-struct MemberConstraint {
-  MemberConstraint(std::string m)
-    : mb(std::move(m)) {}
-
-  bool operator== (const MemberConstraint &other) const {
-    return mb == other.mb;
-  }
-
-  std::string to_str() const {
-    return "[MemberCon " + mb + "]";
-  }
-
-  std::string mb;
-};
-
-template <>
-struct std::hash<MemberConstraint> {
-  std::size_t operator() (const MemberConstraint &c) const {
-    return std::hash<std::string>()(c.mb);
-  }
-};
-
-using Constraint = std::variant<UnaryConstraint, BinaryConstraint, CallConstraint, MemberConstraint>;
+using Constraint = std::variant<UnaryConstraint, BinaryConstraint, FunctionConstraint, MemberConstraint, CallConstraint>;
 
 class FindTargetVisitor : public RecursiveASTVisitor<FindTargetVisitor> {
 public:
@@ -334,7 +370,11 @@ public:
         );
       } else if (auto binaryOp = dyn_cast<BinaryOperator>(varUseExpr.expr)) {
         std::string otherType;
-        auto e = (binaryOp->getLHS() == varUseExpr.var ? binaryOp->getRHS()->getType() : binaryOp->getLHS()->getType());
+        auto e = getCleanType(
+          binaryOp->getLHS() == varUseExpr.var ?
+          binaryOp->getRHS()->getType() :
+          binaryOp->getLHS()->getType()
+        );
         if (e->isDependentType()) {
           continue;
         }
@@ -354,10 +394,15 @@ public:
         if (auto tmp = dyn_cast<CXXOperatorCallExpr>(varUseExpr.expr)) {
           continue;
         }
-        if (auto callableParam = dyn_cast<DeclRefExpr>(callExpr->getCallee())) {
-          if (callableParam == varUseExpr.var) {
+        if (auto callable = dyn_cast<DeclRefExpr>(callExpr->getCallee())) {
+          if (callable == varUseExpr.var) {
+            std::vector<std::string> parameterTypes;
+            for (auto arg = callExpr->arg_begin(); arg != callExpr->arg_end(); arg++) {
+              parameterTypes.push_back(getCleanType((*arg)->getType()).getAsString());
+            }
+            std::string returnType = callExpr->getType().getAsString();
             constraint_map[varUseExpr.ttpdecl].insert(
-              UnaryConstraint("Callable", 0)
+              FunctionConstraint(parameterTypes, returnType)
             );
           }
         } else if (auto namedCallee = dyn_cast<UnresolvedLookupExpr>(callExpr->getCallee())) {
@@ -479,6 +524,8 @@ private:
   ASTContext *context;
 };
 
+using AtomicConstraint = std::variant<QualType, UnaryConstraint, BinaryConstraint, FunctionConstraint, MemberConstraint>;
+
 class Formula {
 public:
   Formula() = default;
@@ -497,7 +544,7 @@ public:
     return -1;
   }
 
-  virtual bool evaluate(const std::function<bool(const Constraint&)> &has_constraint) const {
+  virtual bool evaluate(const std::function<bool(const AtomicConstraint&)> &has_constraint) const {
     return false;
   }
 
@@ -532,7 +579,7 @@ public:
     }
   }
 
-  bool evaluate(const std::function<bool(const Constraint&)> &has_constraint) const override {
+  bool evaluate(const std::function<bool(const AtomicConstraint&)> &has_constraint) const override {
     return value;
   }
 
@@ -542,8 +589,6 @@ public:
 
   bool value;
 };
-
-using AtomicConstraint = std::variant<QualType, UnaryConstraint, BinaryConstraint, MemberConstraint>;
 
 class Atomic : public Formula {
 public:
@@ -561,13 +606,16 @@ public:
       return "(Atom Type " + t.getAsString() + ")";
     } else if (std::holds_alternative<UnaryConstraint>(con)) {
       UnaryConstraint u = std::get<UnaryConstraint>(con);
-      return "(Atom Unary " + u.op + " " + std::to_string(u.pos) + ")";
+      return "(Atom Unary " + u.to_str() + ")";
     } else if (std::holds_alternative<BinaryConstraint>(con)) {
       BinaryConstraint b = std::get<BinaryConstraint>(con);
-      return "(Atom Binary " + b.op + " " + std::to_string(b.pos) + ")";
+      return "(Atom Binary " + b.to_str() + ")";
+    } else if (std::holds_alternative<FunctionConstraint>(con)) {
+      FunctionConstraint f = std::get<FunctionConstraint>(con);
+      return "(Atom Function " + f.to_str() + ")";
     } else {
       MemberConstraint m = std::get<MemberConstraint>(con);
-      return "(Atom Member " + m.mb + ")";
+      return "(Atom Member " + m.to_str() + ")";
     }
   }
 
@@ -575,7 +623,7 @@ public:
     return -1;
   }
 
-  bool evaluate(const std::function<bool(const Constraint&)> &has_constraint) const override {
+  bool evaluate(const std::function<bool(const AtomicConstraint&)> &has_constraint) const override {
     if (std::holds_alternative<QualType>(con)) {
       return false;
     } else if (std::holds_alternative<UnaryConstraint>(con)) {
@@ -584,6 +632,9 @@ public:
     } else if (std::holds_alternative<BinaryConstraint>(con)) {
       BinaryConstraint b = std::get<BinaryConstraint>(con);
       return has_constraint(b);
+    } else if (std::holds_alternative<FunctionConstraint>(con)) {
+      FunctionConstraint f = std::get<FunctionConstraint>(con);
+      return has_constraint(f);
     } else {
       MemberConstraint m = std::get<MemberConstraint>(con);
       return has_constraint(m);
@@ -596,19 +647,14 @@ public:
       return "std::convertible_to<" + templateTypeParm + ", " + t.getAsString() + ">";
     } else if (std::holds_alternative<UnaryConstraint>(con)) {
       UnaryConstraint u = std::get<UnaryConstraint>(con);
-      if (u.op == "Callable") {
-        return "true";
-      } else {
-        std::string e = ((u.pos == 0) ? ("x" + u.op) : (u.op + "x"));
-        return "requires (" + templateTypeParm + " x) { " + e + "; }";
-      }
+      std::string e = ((u.pos == 0) ? ("x" + u.op) : (u.op + "x"));
+      return "requires (" + templateTypeParm + " x) { " + e + "; }";
     } else if (std::holds_alternative<BinaryConstraint>(con)) {
       BinaryConstraint b = std::get<BinaryConstraint>(con);
       std::string e = ((b.pos == 0) ? ("x" + b.op + "y") : ("y" + b.op + "x"));
       return "requires (" + templateTypeParm + " x, " + b.otherType + " y) { " + e + "; }";
     } else {
       // TODO
-      MemberConstraint m = std::get<MemberConstraint>(con);
       return "true";
     }
   }
@@ -642,7 +688,7 @@ public:
     return -1;
   }
 
-  bool evaluate(const std::function<bool(const Constraint&)> &has_constraint) const override {
+  bool evaluate(const std::function<bool(const AtomicConstraint&)> &has_constraint) const override {
     bool ret = true;
     for (auto f : conjuncts) {
       ret = ret && (f->evaluate(has_constraint));
@@ -694,7 +740,7 @@ public:
     return -1;
   }
 
-  bool evaluate(const std::function<bool(const Constraint&)> &has_constraint) const override {
+  bool evaluate(const std::function<bool(const AtomicConstraint&)> &has_constraint) const override {
     bool ret = false;
     for (auto f : disjuncts) {
       ret = ret || (f->evaluate(has_constraint));
@@ -748,18 +794,18 @@ private:
 
 namespace namedrequirements {
   template <typename T>
-  bool matchConstraintType(const Constraint &c) {
+  bool matchConstraintType(const AtomicConstraint &c) {
     return std::holds_alternative<T>(c);
   }
   template <typename T>
-  bool matchConstraintValue(const Constraint &c, const T &pattern) {
+  bool matchConstraintValue(const AtomicConstraint &c, const T &pattern) {
     if (std::holds_alternative<T>(c)) {
       return pattern.match(std::get<T>(c));
     } else {
       return false;
     }
   }
-  bool iteratorHasConstraint(const Constraint &c) {
+  bool iteratorHasConstraint(const AtomicConstraint &c) {
     if (
       matchConstraintType<UnaryConstraint>(c) ||
       matchConstraintType<BinaryConstraint>(c)
@@ -777,7 +823,7 @@ namespace namedrequirements {
       return true;
     }
   }
-  bool inputIteratorHasConstraint(const Constraint &c) {
+  bool inputIteratorHasConstraint(const AtomicConstraint &c) {
     if (iteratorHasConstraint(c)) {
       return true;
     } else if (
@@ -797,7 +843,7 @@ namespace namedrequirements {
       return true;
     }
   }
-  bool outputIteratorHasConstraint(const Constraint &c) {
+  bool outputIteratorHasConstraint(const AtomicConstraint &c) {
     if (iteratorHasConstraint(c)) {
       return true;
     } else if (
@@ -815,10 +861,10 @@ namespace namedrequirements {
       return true;
     }
   }
-  bool forwardIteratorHasConstraint(const Constraint &c) {
+  bool forwardIteratorHasConstraint(const AtomicConstraint &c) {
     return inputIteratorHasConstraint(c);
   }
-  bool bidirectionalIteratorHasConstraint(const Constraint &c) {
+  bool bidirectionalIteratorHasConstraint(const AtomicConstraint &c) {
     if (forwardIteratorHasConstraint(c)) {
       return true;
     } else if (
@@ -836,7 +882,7 @@ namespace namedrequirements {
       return true;
     }
   }
-  bool randomAccessIteratorHasConstraint(const Constraint &c) {
+  bool randomAccessIteratorHasConstraint(const AtomicConstraint &c) {
     if (bidirectionalIteratorHasConstraint(c)) {
       return true;
     } else if (
@@ -861,10 +907,10 @@ namespace namedrequirements {
   }
   // named requirements ->
   // (has_constraint, has_instantiation)
-  std::unordered_map<
+  std::vector<std::pair<
     std::string,
-    std::pair<std::function<bool(const Constraint&)>, std::function<bool(const Instantiation&)>>
-  > library = {
+    std::pair<std::function<bool(const AtomicConstraint&)>, std::function<bool(const Instantiation&)>>
+  >> iteratorRequirements = {
     {"Iterator",
       {iteratorHasConstraint, [](const Instantiation &i){ return true; }}},
     {"InputIterator",
@@ -885,7 +931,7 @@ std::vector<std::string> infer(
   const Formula *formula,
   const std::unordered_set<Instantiation> &instantiation_set) {
   std::vector<std::string> requirements;
-  for (const auto &[name, predicates] : namedrequirements::library) {
+  for (const auto &[name, predicates] : namedrequirements::iteratorRequirements) {
     const auto &[constraint_predicate, instantiation_predicate] = predicates;
     bool ok1 = formula->evaluate(constraint_predicate);
     bool ok2 = true;
@@ -897,6 +943,7 @@ std::vector<std::string> infer(
     }
     if (ok1 && ok2) {
       requirements.push_back(name);
+      break;
     }
   }
   return requirements;
@@ -922,11 +969,17 @@ public:
         bool triviallyFalse = false;
         for (const auto &c : visitor.constraint_map.at(ttpd)) {
           if (std::holds_alternative<UnaryConstraint>(c)) {
-            auto unary = pool.poolNew<Atomic>(std::get<UnaryConstraint>(c));
-            conj->addConjunct(unary);
+            auto u = pool.poolNew<Atomic>(std::get<UnaryConstraint>(c));
+            conj->addConjunct(u);
           } else if (std::holds_alternative<BinaryConstraint>(c)) {
-            auto binary = pool.poolNew<Atomic>(std::get<BinaryConstraint>(c));
-            conj->addConjunct(binary);
+            auto b = pool.poolNew<Atomic>(std::get<BinaryConstraint>(c));
+            conj->addConjunct(b);
+          } else if (std::holds_alternative<MemberConstraint>(c)) {
+            auto m = pool.poolNew<Atomic>(std::get<MemberConstraint>(c));
+            conj->addConjunct(m);
+          } else if (std::holds_alternative<FunctionConstraint>(c)) {
+            auto f = pool.poolNew<Atomic>(std::get<FunctionConstraint>(c));
+            conj->addConjunct(f);
           } else if (std::holds_alternative<CallConstraint>(c)) {
             auto disj = pool.poolNew<Disjunction>();
             bool triviallyTrue = false;
@@ -962,9 +1015,6 @@ public:
             } else {
               conj->addConjunct(disj);
             }
-          } else if (std::holds_alternative<MemberConstraint>(c)) {
-            auto member = pool.poolNew<Atomic>(std::get<MemberConstraint>(c));
-            conj->addConjunct(member);
           }
         }
         status[ttpd] = 2;
