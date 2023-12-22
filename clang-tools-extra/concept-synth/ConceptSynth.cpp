@@ -171,7 +171,7 @@ public:
   // Get instantiations
   bool VisitFunctionDecl(FunctionDecl *declaration) {
     if (declaration->isTemplateInstantiation()) {
-      argLists.push_back(declaration->getTemplateSpecializationArgs());
+      templateArgumentLists.push_back(declaration->getTemplateSpecializationArgs());
     }
     return true;
   }
@@ -185,7 +185,7 @@ public:
       functionTemplateDeclaration->getTemplateParameters()
     )) {
       if (auto ps = getFirstStmtParent(var, context)) {
-        varUseStmts.push_back(VariableUseStmt(ttpdecl, var->getType(), var, ps));
+        variableUseStmts.push_back(VariableUseStmt(ttpdecl, var->getType(), var, ps));
       }
     }
     return true;
@@ -195,8 +195,8 @@ public:
     return true;
   }
 
-  std::vector<const TemplateArgumentList *> argLists;
-  std::vector<VariableUseStmt> varUseStmts;
+  std::vector<const TemplateArgumentList *> templateArgumentLists;
+  std::vector<VariableUseStmt> variableUseStmts;
 
 private:
 
@@ -227,36 +227,40 @@ struct std::hash<Instantiation> {
   }
 };
 
-// TODO: for constraints, consider cv-qualifiers and references
-
 using TypeBox = std::variant<std::string, QualType>;
 
 std::string typeBoxToString(const TypeBox &t) {
   if (std::holds_alternative<std::string>(t)) {
     return std::get<std::string>(t);
   } else {
-    return std::get<QualType>(t).getAsString();
+    auto qt = std::get<QualType>(t);
+    return qt.getAsString();
   }
 }
 
 struct UnaryConstraint {
-  UnaryConstraint(std::string o, int p = -1)
-    : op(std::move(o)), pos(p) {}
+  UnaryConstraint(std::string o, TypeBox s = "", int p = -1)
+    : op(std::move(o)), selfType(s), pos(p) {}
 
   bool operator== (const UnaryConstraint &other) const {
-    return op == other.op && pos == other.pos;
+    return op == other.op && selfType == other.selfType && pos == other.pos;
   }
 
   std::string to_str() const {
-    return "[UnaryCon " + op + ' ' + std::to_string(pos) + "]";
+    return "[UnaryCon " + typeBoxToString(selfType) + ' ' + op + ' ' + std::to_string(pos) + "]";
   }
 
   bool match(const UnaryConstraint &other) const {
     return op == other.op &&
+           (
+            (std::holds_alternative<std::string>(selfType) && (std::get<std::string>(selfType) == ""))
+            || selfType == other.selfType
+           ) &&
            (pos == -1 || pos == other.pos);
   }
 
   std::string op;
+  TypeBox selfType;
   int pos;
 };
 
@@ -268,19 +272,23 @@ struct std::hash<UnaryConstraint> {
 };
 
 struct BinaryConstraint {
-  BinaryConstraint(std::string o, int p = -1, TypeBox t = "")
-    : op(std::move(o)), pos(p), otherType(t) {}
+  BinaryConstraint(std::string o, TypeBox s = "", int p = -1, TypeBox t = "")
+    : op(std::move(o)), selfType(s), pos(p), otherType(t) {}
 
   bool operator== (const BinaryConstraint &other) const {
-    return op == other.op && pos == other.pos && otherType == other.otherType;
+    return op == other.op && selfType == other.selfType && pos == other.pos && otherType == other.otherType;
   }
 
   std::string to_str() const {
-    return "[BinaryCon " + op + ' ' + std::to_string(pos) + ' ' + typeBoxToString(otherType) + "]";
+    return "[BinaryCon " + op + ' ' + typeBoxToString(selfType) + ' ' + std::to_string(pos) + ' ' + typeBoxToString(otherType) + "]";
   }
 
   bool match(const BinaryConstraint &other) const {
     return op == other.op &&
+            (
+              (std::holds_alternative<std::string>(selfType) && (std::get<std::string>(selfType) == ""))
+              || selfType == other.selfType
+            ) &&
             (pos == -1 || pos == other.pos) &&
             (
               (std::holds_alternative<std::string>(otherType) && (std::get<std::string>(otherType) == ""))
@@ -289,6 +297,7 @@ struct BinaryConstraint {
   }
 
   std::string op;
+  TypeBox selfType;
   int pos;
   TypeBox otherType;
 };
@@ -301,15 +310,16 @@ struct std::hash<BinaryConstraint> {
 };
 
 struct FunctionConstraint {
-  FunctionConstraint(std::vector<TypeBox> p, TypeBox r)
-    : parameterTypes(std::move(p)), returnType(r) {}
+  FunctionConstraint(TypeBox s, std::vector<TypeBox> p, TypeBox r)
+    : selfType(s), parameterTypes(std::move(p)), returnType(r) {}
 
   bool operator== (const FunctionConstraint &other) const {
-    return parameterTypes == other.parameterTypes && returnType == other.returnType;
+    return selfType == other.selfType && parameterTypes == other.parameterTypes && returnType == other.returnType;
   }
 
   std::string to_str() const {
-    std::string ret = "[FunctionCon";
+    std::string ret = "[FunctionCon ";
+    ret += typeBoxToString(selfType);
     for (const auto &t : parameterTypes) {
       ret += ' ';
       ret += typeBoxToString(t);
@@ -320,6 +330,7 @@ struct FunctionConstraint {
     return ret;
   }
 
+  TypeBox selfType;
   std::vector<TypeBox> parameterTypes;
   TypeBox returnType;
 };
@@ -332,16 +343,17 @@ struct std::hash<FunctionConstraint> {
 };
 
 struct MemberConstraint {
-  MemberConstraint(std::string m, bool i, std::vector<TypeBox> p, TypeBox r)
-    : mb(std::move(m)), isFun(i), parameterTypes(std::move(p)), returnType(r) {}
+  MemberConstraint(std::string m, TypeBox s, bool i, std::vector<TypeBox> p, TypeBox r)
+    : mb(std::move(m)), selfType(s), isFun(i), parameterTypes(std::move(p)), returnType(r) {}
 
   bool operator== (const MemberConstraint &other) const {
-    return mb == other.mb && isFun == other.isFun
+    return mb == other.mb && selfType == other.selfType && isFun == other.isFun
            && parameterTypes == other.parameterTypes && returnType == other.returnType;
   }
 
   std::string to_str() const {
-    std::string ret = "[MemberCon";
+    std::string ret = "[MemberCon ";
+    ret += typeBoxToString(selfType);
     ret += ' ';
     ret += std::to_string(isFun ? 1 : 0);
     for (const auto &t : parameterTypes) {
@@ -355,6 +367,7 @@ struct MemberConstraint {
   }
 
   std::string mb;
+  TypeBox selfType;
   bool isFun;
   std::vector<TypeBox> parameterTypes;
   TypeBox returnType;
@@ -367,20 +380,21 @@ struct std::hash<MemberConstraint> {
   }
 };
 
-using CalleeConstraint = std::variant<TypeBox, const TemplateTypeParmDecl*>;
+using CallConstraintElement = std::variant<TypeBox, const TemplateTypeParmDecl*>;
 
 struct CallConstraint {
-  CallConstraint(std::vector<CalleeConstraint> c)
-    : ccs(std::move(c)) {
+  CallConstraint(TypeBox s, std::vector<CallConstraintElement> c)
+    : selfType(s), ccs(std::move(c)) {
     std::sort(ccs.begin(), ccs.end());
   }
 
   bool operator== (const CallConstraint &other) const {
-    return ccs == other.ccs;
+    return selfType == other.selfType && ccs == other.ccs;
   }
 
   std::string to_str() const {
-    std::string ret = "[CallCon";
+    std::string ret = "[CallCon ";
+    ret += typeBoxToString(selfType);
     for (const auto &cc : ccs) {
       if (std::holds_alternative<TypeBox>(cc)) {
         ret += ' ';
@@ -394,7 +408,8 @@ struct CallConstraint {
     return ret;
   }
 
-  std::vector<CalleeConstraint> ccs;
+  TypeBox selfType;
+  std::vector<CallConstraintElement> ccs;
 };
 
 template <>
@@ -404,7 +419,30 @@ struct std::hash<CallConstraint> {
   }
 };
 
-using Constraint = std::variant<UnaryConstraint, BinaryConstraint, FunctionConstraint, MemberConstraint, CallConstraint>;
+struct ConcreteConstraint {
+  ConcreteConstraint(TypeBox s, TypeBox c)
+    : selfType(s), constraintType(c) {}
+  
+  bool operator== (const ConcreteConstraint &other) const {
+    return selfType == other.selfType && constraintType == other.constraintType;
+  }
+
+  std::string to_str() const {
+    return "[ConcreteCon " + typeBoxToString(selfType) + ' ' + typeBoxToString(constraintType) + "]";
+  }
+
+  TypeBox selfType;
+  TypeBox constraintType;
+};
+
+template <>
+struct std::hash<ConcreteConstraint> {
+  std::size_t operator() (const ConcreteConstraint &c) const {
+    return std::hash<std::string>()(c.to_str());
+  }
+};
+
+using Constraint = std::variant<UnaryConstraint, BinaryConstraint, FunctionConstraint, MemberConstraint, CallConstraint, ConcreteConstraint>;
 
 class FindTargetVisitor : public RecursiveASTVisitor<FindTargetVisitor> {
 public:
@@ -422,35 +460,37 @@ public:
         return true;
       }
     }
-    // initialize constraint_map
+    // initialize constraintMap
     for (auto p = tmpList->begin(); p != tmpList->end(); p++) {
       if (auto ttpdecl = dyn_cast<TemplateTypeParmDecl>(*p)) {
-        constraint_map[ttpdecl].clear();
+        constraintMap[ttpdecl].clear();
       }
     }
     // get (1) template-typed variable usages (2) instantiations
     TraverseFunctionTemplateVisitor visitor(context, declaration);
     visitor.TraverseDecl(declaration);
     // handle template-typed variable usages
-    for (auto varUseExpr : visitor.varUseStmts) {
+    for (auto varUseExpr : visitor.variableUseStmts) {
       if (auto unaryOp = dyn_cast<UnaryOperator>(varUseExpr.stmt)) {
-        constraint_map[varUseExpr.ttpdecl].insert(
-          Constraint(UnaryConstraint(unaryOp->getOpcodeStr(unaryOp->getOpcode()).str(),
+        constraintMap[varUseExpr.ttpdecl].insert(
+          UnaryConstraint(
+            unaryOp->getOpcodeStr(unaryOp->getOpcode()).str(),
+            varUseExpr.type,
             ((unaryOp->isPostfix()) ? 0 : 1)
-          ))
+          )
         );
       } else if (auto binaryOp = dyn_cast<BinaryOperator>(varUseExpr.stmt)) {
-        auto otherType = getCleanType(
+        auto otherType = 
           binaryOp->getLHS() == varUseExpr.var ?
           binaryOp->getRHS()->getType() :
-          binaryOp->getLHS()->getType()
-        );
-        constraint_map[varUseExpr.ttpdecl].insert(
-          Constraint(BinaryConstraint(
+          binaryOp->getLHS()->getType();
+        constraintMap[varUseExpr.ttpdecl].insert(
+          BinaryConstraint(
             binaryOp->getOpcodeStr(binaryOp->getOpcode()).str(),
+            varUseExpr.type,
             (binaryOp->getLHS() == varUseExpr.var ? 0 : 1),
             otherType
-          ))
+          )
         );
       } else if (auto callExpr = dyn_cast<CallExpr>(varUseExpr.stmt)) {
         // ignore overloaded operators
@@ -462,7 +502,7 @@ public:
           if (callable == varUseExpr.var) {
             std::vector<TypeBox> parameterTypes;
             for (auto arg = callExpr->arg_begin(); arg != callExpr->arg_end(); arg++) {
-              parameterTypes.push_back(getCleanType((*arg)->getType()));
+              parameterTypes.push_back((*arg)->getType());
             }
             TypeBox returnType = "";
             for (const auto &[type, checker] : simpleInferences) {
@@ -472,8 +512,12 @@ public:
                 break;
               }
             }
-            constraint_map[varUseExpr.ttpdecl].insert(
-              FunctionConstraint(std::move(parameterTypes), returnType)
+            constraintMap[varUseExpr.ttpdecl].insert(
+              FunctionConstraint(
+                varUseExpr.type,
+                std::move(parameterTypes),
+                returnType
+              )
             );
           }
         // var used as argument
@@ -487,7 +531,7 @@ public:
             pos++;
           }
           // constraints imposed by overloading candidates
-          std::vector<CalleeConstraint> ccs;
+          std::vector<CallConstraintElement> ccs;
           bool hasUnhandledCandidate = false;
           int nArgs = callExpr->getNumArgs();
           for (auto declit = namedCallee->decls_begin(); declit != namedCallee->decls_end(); declit++) {
@@ -527,7 +571,7 @@ public:
                     ccs.push_back(qt);
                   }
                 }
-                // specializations
+                // specializations (C++ only allows full specialization for function templates)
                 for (auto specit = ftd->spec_begin(); specit != ftd->spec_end(); specit++) {
                   auto spec = *specit;
                   if (!(spec->isTemplateInstantiation())) {
@@ -560,8 +604,8 @@ public:
           }
           // only treat it as a constraint when every case is handled
           if (!hasUnhandledCandidate) {
-            constraint_map[varUseExpr.ttpdecl].insert(
-              Constraint(CallConstraint(ccs))
+            constraintMap[varUseExpr.ttpdecl].insert(
+              CallConstraint(varUseExpr.type, std::move(ccs))
             );
           }
         }
@@ -576,7 +620,7 @@ public:
         if (possibleMemberCall && possibleMemberCall->getCallee() == mexpr) {
           std::vector<TypeBox> parameterTypes;
           for (auto arg = possibleMemberCall->arg_begin(); arg != possibleMemberCall->arg_end(); arg++) {
-            parameterTypes.push_back(getCleanType((*arg)->getType()));
+            parameterTypes.push_back((*arg)->getType());
           }
           TypeBox returnType = "";
           for (const auto &[type, checker] : simpleInferences) {
@@ -586,13 +630,14 @@ public:
               break;
             }
           }
-          constraint_map[varUseExpr.ttpdecl].insert(
-            Constraint(MemberConstraint(
+          constraintMap[varUseExpr.ttpdecl].insert(
+            MemberConstraint(
               mexpr->getMemberNameInfo().getAsString(),
+              varUseExpr.type,
               true,
               std::move(parameterTypes),
               returnType
-            ))
+            )
           );
         // this is a member variable
         } else {
@@ -604,13 +649,14 @@ public:
               break;
             }
           }
-          constraint_map[varUseExpr.ttpdecl].insert(
-            Constraint(MemberConstraint(
+          constraintMap[varUseExpr.ttpdecl].insert(
+            MemberConstraint(
               mexpr->getMemberNameInfo().getAsString(),
+              varUseExpr.type,
               false,
               {},
               returnType
-            ))
+            )
           );
         }
       }
@@ -621,9 +667,9 @@ public:
     for (int i = 0; i < len; i++) {
       auto decl = tmpList->getParam(i);
       if (auto ttpdecl = dyn_cast<TemplateTypeParmDecl>(decl)) {
-        for (auto argList : visitor.argLists) {
+        for (auto argList : visitor.templateArgumentLists) {
           Instantiation insta((*argList)[i].getAsType());
-          instantiation_map[ttpdecl].insert(insta);
+          instantiationMap[ttpdecl].insert(insta);
         }
       }
     }
@@ -631,14 +677,14 @@ public:
     return true;
   }
 
-  std::unordered_map<const TemplateTypeParmDecl*, std::unordered_set<Constraint>> constraint_map;
-  std::unordered_map<const TemplateTypeParmDecl*, std::unordered_set<Instantiation>> instantiation_map;
+  std::unordered_map<const TemplateTypeParmDecl*, std::unordered_set<Constraint>> constraintMap;
+  std::unordered_map<const TemplateTypeParmDecl*, std::unordered_set<Instantiation>> instantiationMap;
 
 private:
   ASTContext *context;
 };
 
-using AtomicConstraint = std::variant<QualType, UnaryConstraint, BinaryConstraint, FunctionConstraint, MemberConstraint>;
+using AtomicConstraint = std::variant<ConcreteConstraint, UnaryConstraint, BinaryConstraint, FunctionConstraint, MemberConstraint>;
 
 class Formula {
 public:
@@ -662,7 +708,7 @@ public:
     return false;
   }
 
-  virtual std::string printConcept(const std::string &templateTypeParm) const {
+  virtual std::string printConstraintCode(TypeBox t) const {
     return "";
   }
 };
@@ -697,11 +743,10 @@ public:
     return value;
   }
 
-  std::string printConcept(const std::string &templateTypeParm) const override {
+  std::string printConstraintCode(TypeBox t) const override {
     return value ? "true" : "false";
   }
 
-private:
   bool value;
 };
 
@@ -716,9 +761,9 @@ public:
   ~Atomic() override {}
 
   std::string getAsString() const override {
-    if (std::holds_alternative<QualType>(con)) {
-      QualType t = std::get<QualType>(con);
-      return "(Atom Type " + t.getAsString() + ")";
+    if (std::holds_alternative<ConcreteConstraint>(con)) {
+      ConcreteConstraint c = std::get<ConcreteConstraint>(con);
+      return "(Atom Concrete " + c.to_str() + ")";
     } else if (std::holds_alternative<UnaryConstraint>(con)) {
       UnaryConstraint u = std::get<UnaryConstraint>(con);
       return "(Atom Unary " + u.to_str() + ")";
@@ -742,20 +787,44 @@ public:
     return has_constraint(con);
   }
 
-  std::string printConcept(const std::string &templateTypeParm) const override {
-    if (std::holds_alternative<QualType>(con)) {
-      QualType t = std::get<QualType>(con);
-      return stringFormat("std::convertible_to<#, #>", {templateTypeParm, t.getAsString()});
+  std::string printConstraintCode(TypeBox t) const override {
+    if (std::holds_alternative<ConcreteConstraint>(con)) {
+      ConcreteConstraint c = std::get<ConcreteConstraint>(con);
+      std::string qts;
+      if (t != TypeBox("")) {
+        qts = typeBoxToString(t);
+      } else {
+        qts = typeBoxToString(c.selfType);
+      }
+      return stringFormat("std::convertible_to<#, #>", {qts, typeBoxToString(c.constraintType)});
     } else if (std::holds_alternative<UnaryConstraint>(con)) {
       UnaryConstraint u = std::get<UnaryConstraint>(con);
+      std::string qts;
+      if (t != TypeBox("")) {
+        qts = typeBoxToString(t);
+      } else {
+        qts = typeBoxToString(u.selfType);
+      }
       std::string expr = ((u.pos == 0) ? ("x" + u.op) : (u.op + "x"));
-      return stringFormat("requires (# x) { #; }", {templateTypeParm, expr});
+      return stringFormat("requires (# x) { #; }", {qts, expr});
     } else if (std::holds_alternative<BinaryConstraint>(con)) {
       BinaryConstraint b = std::get<BinaryConstraint>(con);
+      std::string qts;
+      if (t != TypeBox("")) {
+        qts = typeBoxToString(t);
+      } else {
+        qts = typeBoxToString(b.selfType);
+      }
       std::string expr = ((b.pos == 0) ? ("x" + b.op + "y") : ("y" + b.op + "x"));
-      return stringFormat("requires (# x, # y) { #; }", {templateTypeParm, typeBoxToString(b.otherType), expr});
+      return stringFormat("requires (# x, # y) { #; }", {qts, typeBoxToString(b.otherType), expr});
     } else if (std::holds_alternative<FunctionConstraint>(con)) {
       FunctionConstraint f = std::get<FunctionConstraint>(con);
+      std::string qts;
+      if (t != TypeBox("")) {
+        qts = typeBoxToString(t);
+      } else {
+        qts = typeBoxToString(f.selfType);
+      }
       int np = f.parameterTypes.size();
       std::string pattern = "requires (# f, ";
       for (int i = 0; i < np; i++) {
@@ -777,7 +846,7 @@ public:
         call = "{" + call + "} -> " + "std::convertible_to<" + typeBoxToString(f.returnType) + ">";
       }
       std::vector<std::string> elements;
-      elements.push_back(templateTypeParm);
+      elements.push_back(qts);
       for (const auto &p : f.parameterTypes) {
         elements.push_back(typeBoxToString(p));
       }
@@ -785,6 +854,12 @@ public:
       return stringFormat(pattern, elements);
     } else if (std::holds_alternative<MemberConstraint>(con)) {
       MemberConstraint m = std::get<MemberConstraint>(con);
+      std::string qts;
+      if (t != TypeBox("")) {
+        qts = typeBoxToString(t);
+      } else {
+        qts = typeBoxToString(m.selfType);
+      }
       int np = m.parameterTypes.size();
       std::string pattern = "requires (# o, ";
       for (int i = 0; i < np; i++) {
@@ -809,7 +884,7 @@ public:
         access = "{" + access + "} -> " + "std::convertible_to<" + typeBoxToString(m.returnType) + ">";
       }
       std::vector<std::string> elements;
-      elements.push_back(templateTypeParm);
+      elements.push_back(qts);
       for (const auto &p : m.parameterTypes) {
         elements.push_back(typeBoxToString(p));
       }
@@ -820,7 +895,6 @@ public:
     }
   }
 
-private:
   AtomicConstraint con;
 };
 
@@ -858,10 +932,10 @@ public:
     return ret;
   }
 
-  std::string printConcept(const std::string &templateTypeParm) const override {
+  std::string printConstraintCode(TypeBox t) const override {
     std::string ret = "";
     for (auto f : conjuncts) {
-      auto conj = f->printConcept(templateTypeParm);
+      auto conj = f->printConstraintCode(t);
       if (conj != "true") {
         if (ret != "") {
           ret += " && ";
@@ -885,7 +959,7 @@ public:
 
 class Disjunction : public Formula {
 public:
-  Disjunction() = default;
+  Disjunction(TypeBox i) : inheritance(i) {}
 
   Disjunction(const Disjunction &d) = delete;
 
@@ -917,10 +991,10 @@ public:
     return ret;
   }
 
-  std::string printConcept(const std::string &templateTypeParm) const override {
+  std::string printConstraintCode(TypeBox t) const override {
     std::string ret = "";
     for (auto f : disjuncts) {
-      auto disj = f->printConcept(templateTypeParm);
+      auto disj = f->printConstraintCode((t == TypeBox("")) ? inheritance : t);
       if (disj != "false") {
         if (ret != "") {
           ret += " || ";
@@ -939,34 +1013,9 @@ public:
     disjuncts.push_back(f);
   }
 
+  TypeBox inheritance; // for inheriting qualified types
   std::vector<Formula*> disjuncts;
 };
-
-class Pool {
-public:
-  Pool() = default;
-
-  Pool(const Pool &p) = delete;
-
-  Pool &operator= (const Pool &p) = delete;
-
-  ~Pool() {
-    for (auto ptr : pointers) {
-      delete ptr;
-    }
-  }
-
-  template <typename T, typename... Args>
-  T *poolNew(Args&&... args) {
-    auto ptr = new T(std::forward<Args>(args)...);
-    pointers.push_back(ptr);
-    return ptr;
-  }
-
-private:
-  std::vector<Formula*> pointers;
-};
-
 
 namespace namedrequirements {
   template <typename T>
@@ -987,8 +1036,8 @@ namespace namedrequirements {
       matchConstraintType<BinaryConstraint>(c)
     ) {
       if (
-        matchConstraintValue(c, UnaryConstraint("*", 1)) ||
-        matchConstraintValue(c, UnaryConstraint("++", 1)) ||
+        matchConstraintValue(c, UnaryConstraint("*", "", 1)) ||
+        matchConstraintValue(c, UnaryConstraint("++", "", 1)) ||
         matchConstraintValue(c, BinaryConstraint("="))
       ) {
         return true;
@@ -1009,7 +1058,7 @@ namespace namedrequirements {
       if (
         matchConstraintValue(c, BinaryConstraint("==")) ||
         matchConstraintValue(c, BinaryConstraint("!=")) ||
-        matchConstraintValue(c, UnaryConstraint("++", 0))
+        matchConstraintValue(c, UnaryConstraint("++", "", 0))
       ) {
         return true;
       } else {
@@ -1027,7 +1076,7 @@ namespace namedrequirements {
       matchConstraintType<BinaryConstraint>(c)
     ) {
       if (
-        matchConstraintValue(c, UnaryConstraint("++", 0))
+        matchConstraintValue(c, UnaryConstraint("++", "", 0))
       ) {
         return true;
       } else {
@@ -1125,6 +1174,31 @@ std::vector<std::string> infer(
   return requirements;
 }
 
+class Pool {
+public:
+  Pool() = default;
+
+  Pool(const Pool &p) = delete;
+
+  Pool &operator= (const Pool &p) = delete;
+
+  ~Pool() {
+    for (auto ptr : pointers) {
+      delete ptr;
+    }
+  }
+
+  template <typename T, typename... Args>
+  T *poolNew(Args&&... args) {
+    auto ptr = new T(std::forward<Args>(args)...);
+    pointers.push_back(ptr);
+    return ptr;
+  }
+
+private:
+  std::vector<Formula*> pointers;
+};
+
 class ConceptSynthConsumer : public clang::ASTConsumer {
 public:
   explicit ConceptSynthConsumer(ASTContext *context) : visitor(context) {}
@@ -1141,67 +1215,67 @@ public:
       if (status[ttpd] == 0) { // not visited
         status[ttpd] = 1;
         auto conj = pool.poolNew<Conjunction>();
-        bool triviallyFalse = false;
-        for (const auto &c : visitor.constraint_map.at(ttpd)) {
-          if (std::holds_alternative<UnaryConstraint>(c)) {
-            auto u = pool.poolNew<Atomic>(std::get<UnaryConstraint>(c));
+        bool conjunctionTriviallyFalse = false;
+        for (const auto &con : visitor.constraintMap.at(ttpd)) {
+          if (std::holds_alternative<UnaryConstraint>(con)) {
+            auto u = pool.poolNew<Atomic>(std::get<UnaryConstraint>(con));
             conj->addConjunct(u);
-          } else if (std::holds_alternative<BinaryConstraint>(c)) {
-            auto b = pool.poolNew<Atomic>(std::get<BinaryConstraint>(c));
+          } else if (std::holds_alternative<BinaryConstraint>(con)) {
+            auto b = pool.poolNew<Atomic>(std::get<BinaryConstraint>(con));
             conj->addConjunct(b);
-          } else if (std::holds_alternative<MemberConstraint>(c)) {
-            auto m = pool.poolNew<Atomic>(std::get<MemberConstraint>(c));
+          } else if (std::holds_alternative<MemberConstraint>(con)) {
+            auto m = pool.poolNew<Atomic>(std::get<MemberConstraint>(con));
             conj->addConjunct(m);
-          } else if (std::holds_alternative<FunctionConstraint>(c)) {
-            auto f = pool.poolNew<Atomic>(std::get<FunctionConstraint>(c));
+          } else if (std::holds_alternative<FunctionConstraint>(con)) {
+            auto f = pool.poolNew<Atomic>(std::get<FunctionConstraint>(con));
             conj->addConjunct(f);
-          } else if (std::holds_alternative<CallConstraint>(c)) {
-            auto disj = pool.poolNew<Disjunction>();
-            bool triviallyTrue = false;
-            for (const auto &cc : std::get<CallConstraint>(c).ccs) {
+          } else if (std::holds_alternative<CallConstraint>(con)) {
+            auto c = std::get<CallConstraint>(con);
+            auto disj = pool.poolNew<Disjunction>(c.selfType);
+            bool disjunctionTriviallyTrue = false;
+            for (const auto &cc : c.ccs) {
               if (std::holds_alternative<TypeBox>(cc)) {
-                auto a = pool.poolNew<Atomic>(std::get<QualType>(std::get<TypeBox>(cc)));
+                auto a = pool.poolNew<Atomic>(ConcreteConstraint(c.selfType, std::get<TypeBox>(cc)));
                 disj->addDisjunct(a);
               } else if (std::holds_alternative<const TemplateTypeParmDecl*>(cc)) {
                 if (auto f = dfs(std::get<const TemplateTypeParmDecl*>(cc))) {
-                  if (f->literalStatus() != -1) {
-                    if (f->literalStatus() == 1) {
-                      triviallyTrue = true;
-                      break;
-                    } else {
-                      continue;
-                    }
-                  } else {
+                  if (f->literalStatus() == -1) {
                     disj->addDisjunct(f);
+                  } else if (f->literalStatus() == 0) {
+                    ;
+                  } else {
+                    disjunctionTriviallyTrue = true;
+                    break;
                   }
                 } else { // recursive dependency
-                  triviallyTrue = true;
+                  disjunctionTriviallyTrue = true;
                   break;
                 }
               }
             }
-            if (triviallyTrue) {
+            if (disjunctionTriviallyTrue) {
               continue;
             } else if (disj->disjuncts.size() == 0) {
-              triviallyFalse = true;
+              conjunctionTriviallyFalse = true;
               break;
-            } else if (disj->disjuncts.size() == 1) {
+            } else if (disj->disjuncts.size() == 1) { // omit one layer of disjunction
               conj->addConjunct(disj->disjuncts[0]);
             } else {
               conj->addConjunct(disj);
             }
           }
         }
-        status[ttpd] = 2;
-        if (triviallyFalse) {
-          return results[ttpd] = pool.poolNew<Literal>(false);
+        if (conjunctionTriviallyFalse) {
+          results[ttpd] = pool.poolNew<Literal>(false);
         } else if (conj->conjuncts.size() == 0) {
-          return results[ttpd] = pool.poolNew<Literal>(true);
-        } else if (conj->conjuncts.size() == 1) {
-          return results[ttpd] = conj->conjuncts[0];
+          results[ttpd] = pool.poolNew<Literal>(true);
+        } else if (conj->conjuncts.size() == 1) { // omit one layer of conjunction
+          results[ttpd] = conj->conjuncts[0];
         } else {
-          return results[ttpd] = conj;
+          results[ttpd] = conj;
         }
+        status[ttpd] = 2;
+        return results.at(ttpd);
       } else if (status[ttpd] == 1) { // on stack
         return nullptr;
       } else { // visited
@@ -1209,28 +1283,38 @@ public:
       }
     };
 
-    for (const auto &kv : visitor.constraint_map) {
+    for (const auto &kv : visitor.constraintMap) {
       auto ttpd = kv.first;
       if (status[ttpd] == 0) {
         dfs(ttpd);
       }
     }
 
+    std::vector<std::string> prints;
     for (const auto &kv : results) {
+      std::ostringstream os;
       auto ttpd = kv.first;
       auto f = kv.second;
       auto ftd = fromTemplateTypeParmDeclToFunctionTemplateDecl(ttpd, &context);
       if (ftd) {
-        llvm::outs() << "[" << ftd->getNameAsString() << ", " << ttpd->getNameAsString() << "]\n";
-        llvm::outs() << "\tRaw constraint: " << f->getAsString() << '\n';
-        llvm::outs() << "\tPrinted code: " << f->printConcept(ttpd->getNameAsString()) << '\n';
-        llvm::outs() << "\tInferred constraint:";
-        const auto &inferred = infer(f, visitor.instantiation_map[ttpd]);
+        os << "[" << ftd->getNameAsString() << ", " << ttpd->getNameAsString() << "]\n";
+        os << "\tRaw constraint: " << f->getAsString() << '\n';
+        os << "\tPrinted code: " << f->printConstraintCode("") << '\n';
+        os << "\tInferred constraint:";
+        const auto &inferred = infer(f, visitor.instantiationMap[ttpd]);
         for (const auto &con : inferred) {
-          llvm::outs() << " " << con;
+          os << " " << con;
         }
-        llvm::outs() << "\n";
+        os << "\n";
       }
+      auto s = os.str();
+      if (s.size() > 0) {
+        prints.push_back(s);
+      }
+    }
+    std::sort(prints.begin(), prints.end());
+    for (const auto &s : prints) {
+      llvm::outs() << s;
     }
   }
 
