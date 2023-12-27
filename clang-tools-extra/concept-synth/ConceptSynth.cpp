@@ -7,6 +7,7 @@
 #include "clang/AST/ParentMapContext.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "llvm/Support/CommandLine.h"
 
@@ -22,6 +23,7 @@
 #include <tuple>
 #include <functional>
 #include <variant>
+#include <optional>
 
 #define DEBUG llvm::errs() << "[*** DEBUG LINE " << std::to_string(__LINE__) << " ***] " << "\n"
 #define PRINT(x) llvm::errs() << "[*** PRINT LINE " << std::to_string(__LINE__) << " ***] " << x << "\n"
@@ -188,6 +190,116 @@ struct VariableUseStmt {
   ASTContext *ctx;
 };
 
+std::optional<std::string> getTSTName(const TemplateSpecializationType *tst) {
+  auto tdecl = tst->getTemplateName().getAsTemplateDecl();
+  if (tdecl) {
+    return tdecl->getQualifiedNameAsString();
+  } else {
+    return std::nullopt;
+  }
+}
+
+const Expr *getEnableIfBoolExpr(QualType t) {
+  auto ct = t.getCanonicalType(); // desugar std::enable_if_t
+  if (auto dnt = ct->getAs<DependentNameType>()) {
+    auto qu = dnt->getQualifier();
+    auto id = dnt->getIdentifier();
+    if (qu && id && id->getName() == "type") {
+       if (auto st = qu->getAsType()) { // container struct type
+        if (auto tst = st->getAs<TemplateSpecializationType>()) {
+          auto name = getTSTName(tst);
+          if (name.has_value() && name.value() == "std::enable_if") {
+            auto args = tst->template_arguments();
+            if (args.size() > 0) {
+              if (args[0].getKind() ==
+                  TemplateArgument::ArgKind::Expression) {
+                return args[0].getAsExpr();
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return nullptr;
+}
+
+struct TypeTraitConstraint {
+  TypeTraitConstraint(bool n, std::string p, const TemplateTypeParmDecl *t)
+    : neg(n), predicate(std::move(p)), ttpdecl(t) {}
+
+  bool operator== (const TypeTraitConstraint &other) const {
+    return neg == other.neg && predicate == other.predicate && ttpdecl == other.ttpdecl;
+  }
+
+  std::string toStr() const {
+    std::string content;
+    content += (neg ? "! " : " ");
+    content += predicate;
+    content += std::to_string(reinterpret_cast<uintptr_t>(ttpdecl));
+    return CLASS_STRING(content);
+  }
+
+  bool match(const TypeTraitConstraint &other) const {
+    return neg == other.neg && predicate == other.predicate && ttpdecl == other.ttpdecl;
+  }
+
+  bool neg;
+  std::string predicate;
+  const TemplateTypeParmDecl *ttpdecl;
+};
+
+template <>
+struct std::hash<TypeTraitConstraint> {
+  std::size_t operator() (const TypeTraitConstraint &c) const {
+    return std::hash<std::string>()(c.toStr());
+  }
+};
+
+std::unordered_set<std::string> SupportedTraits {
+  "std::is_void", "std::is_null_pointer", "std::is_integral", "std::is_floating_point",
+  "std::is_array", "std::is_enum", "std::is_union", "std::is_class", "std::is_function", "std::is_pointer"
+};
+
+std::optional<TypeTraitConstraint> trySingletonTrait(
+  const Expr *e,
+  const TemplateParameterList *tplist,
+  ASTContext *ctx) {
+  if (auto e0 = dyn_cast<ImplicitCastExpr>(e)) {
+    e = e0->getSubExpr();
+  }
+  bool neg = false;
+  if (auto e0 = dyn_cast<UnaryOperator>(e)) {
+    if (e0->getOpcode() == UnaryOperator::Opcode::UO_LNot) {
+      e = e0->getSubExpr();
+      neg = true;
+    }
+  }
+  if (auto d = dyn_cast<DependentScopeDeclRefExpr>(e)) {
+    auto qu = d->getQualifier();
+    auto id = d->getDeclName();
+    if (qu && id && id.getAsString() == "value") {
+      if (auto st = qu->getAsType()) { // container struct type
+        if (auto tst = st->getAs<TemplateSpecializationType>()) {
+          auto name = getTSTName(tst);
+          if (name.has_value() && SupportedTraits.count(name.value()) > 0) {
+            auto args = tst->template_arguments();
+            if (args.size() > 0) {
+              if (args[0].getKind() ==
+                  TemplateArgument::ArgKind::Type) {
+                if (auto ttpdecl = fromQualTypeToTemplateTypeParmDecl(args[0].getAsType(), tplist, ctx)) {
+                  return TypeTraitConstraint(neg, name.value(), ttpdecl);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 class TraverseFunctionTemplateVisitor
     : public RecursiveASTVisitor<TraverseFunctionTemplateVisitor> {
 public:
@@ -217,12 +329,26 @@ public:
     return true;
   }
 
+  bool visitStaticAssertDecl(StaticAssertDecl *sad) {
+    auto e = sad->getAssertExpr();
+    auto t = trySingletonTrait(
+      e,
+      functionTemplateDeclaration->getTemplateParameters(),
+      context
+    );
+    if (t.has_value()) {
+      typeTraitConstraints.push_back(t.value());
+    }
+    return true;
+  }
+
   bool shouldVisitTemplateInstantiations() const {
     return true;
   }
 
   std::vector<const TemplateArgumentList *> templateArgumentLists;
   std::vector<VariableUseStmt> variableUseStmts;
+  std::vector<TypeTraitConstraint> typeTraitConstraints;
 
 private:
 
@@ -632,7 +758,15 @@ struct std::hash<ConcreteConstraint> {
   }
 };
 
-using Constraint = std::variant<UnaryConstraint, BinaryConstraint, FunctionConstraint, MemberConstraint, CallConstraint, ConcreteConstraint>;
+using Constraint = std::variant<
+  UnaryConstraint,
+  BinaryConstraint,
+  FunctionConstraint,
+  MemberConstraint,
+  TypeTraitConstraint,
+  CallConstraint,
+  ConcreteConstraint
+>;
 
 std::string constraintToString(const Constraint& c) {
   if (std::holds_alternative<UnaryConstraint>(c)) {
@@ -643,6 +777,8 @@ std::string constraintToString(const Constraint& c) {
     return std::get<FunctionConstraint>(c).toStr();
   } else if (std::holds_alternative<MemberConstraint>(c)) {
     return std::get<MemberConstraint>(c).toStr();
+  } else if (std::holds_alternative<TypeTraitConstraint>(c)) {
+    return std::get<TypeTraitConstraint>(c).toStr();
   } else if (std::holds_alternative<CallConstraint>(c)) {
     return std::get<CallConstraint>(c).toStr();
   } else {
@@ -670,9 +806,26 @@ public:
         constraintMap[ttpdecl].clear();
       }
     }
-    // get (1) template-typed variable usages (2) instantiations
+    // traverse
     TraverseFunctionTemplateVisitor visitor(context, ftdecl);
     visitor.TraverseDecl(ftdecl);
+    // get type trait constraints
+    for (auto pit = ftdecl->getAsFunction()->param_begin();
+         pit != ftdecl->getAsFunction()->param_end();
+         pit++) {
+      if (auto e = getEnableIfBoolExpr((*pit)->getType())) {
+        auto t = trySingletonTrait(e, tplist, context);
+        if (t.has_value()) {
+          constraintMap[t.value().ttpdecl].insert(t.value());
+        }
+      }
+    }
+    if (auto e = getEnableIfBoolExpr(ftdecl->getAsFunction()->getReturnType())) {
+      auto t = trySingletonTrait(e, tplist, context);
+      if (t.has_value()) {
+        constraintMap[t.value().ttpdecl].insert(t.value());
+      }
+    }
     // handle template-typed variable usages
     for (auto varUseExpr : visitor.variableUseStmts) {
       if (auto unaryOp = dyn_cast<UnaryOperator>(varUseExpr.stmt)) {
@@ -886,7 +1039,7 @@ private:
   ASTContext *context;
 };
 
-using AtomicConstraint = std::variant<ConcreteConstraint, UnaryConstraint, BinaryConstraint, FunctionConstraint, MemberConstraint>;
+using AtomicConstraint = std::variant<ConcreteConstraint, UnaryConstraint, BinaryConstraint, FunctionConstraint, MemberConstraint, TypeTraitConstraint>;
 
 struct ConstraintCode {
   ConstraintCode() = default;
@@ -901,8 +1054,6 @@ struct ConstraintCode {
     return true;
   }
 
-  virtual void simplify() {}
-
   virtual std::string toStr() {
     return "";
   }
@@ -916,8 +1067,6 @@ struct LiteralConstraintCode : public ConstraintCode {
   LiteralConstraintCode &operator= (const LiteralConstraintCode &c) = delete;
 
   ~LiteralConstraintCode() override {}
-
-  void simplify() override {}
 
   std::string toStr() override {
     return value;
@@ -939,8 +1088,6 @@ struct ConcreteConstraintCode : public ConstraintCode {
     return selfType != "" && targetType != "";
   }
 
-  void simplify() override {}
-
   std::string toStr() override {
     return stringFormat("std::convertible_to<#, #>", {selfType, targetType});
   }
@@ -961,8 +1108,6 @@ struct UnaryConstraintCode : public ConstraintCode {
   bool isValid() override {
     return selfType != "";
   }
-
-  void simplify() override {}
 
   std::string toStr() override {
     std::string expr = ((position == 0) ? ("x" + operatorName) : (operatorName + "x"));
@@ -986,8 +1131,6 @@ struct BinaryConstraintCode : public ConstraintCode {
   bool isValid() override {
     return selfType != "" && otherType != "";
   }
-
-  void simplify() override {}
 
   std::string toStr() override {
     std::string expr = ((position == 0) ? ("x " + operatorName + " y") : ("y " + operatorName + " x"));
@@ -1020,8 +1163,6 @@ struct FunctionConstraintCode : public ConstraintCode {
     }
     return true;
   }
-
-  void simplify() override {}
 
   std::string toStr() override {
     int np = parameterTypes.size();
@@ -1076,8 +1217,6 @@ struct MemberConstraintCode : public ConstraintCode {
     return true;
   }
 
-  void simplify() override {}
-
   std::string toStr() override {
     int np = parameterTypes.size();
     std::string pattern = "requires (# o";
@@ -1117,6 +1256,28 @@ struct MemberConstraintCode : public ConstraintCode {
   std::string returnType;
 };
 
+struct TypeTraitConstraintCode : public ConstraintCode {
+  TypeTraitConstraintCode() = default;
+
+  TypeTraitConstraintCode(const TypeTraitConstraintCode &c) = delete;
+
+  TypeTraitConstraintCode &operator= (const TypeTraitConstraintCode &c) = delete;
+
+  ~TypeTraitConstraintCode() override {}
+
+  bool isValid() override {
+    return type != "";
+  }
+
+  std::string toStr() override {
+    return (neg ? "!" : "") + stringFormat("#<#>::value", {trait, type});
+  }
+
+  bool neg;
+  std::string trait;
+  std::string type;
+};
+
 struct ConjunctionConstraintCode : public ConstraintCode {
   ConjunctionConstraintCode() = default;
 
@@ -1130,18 +1291,23 @@ struct ConjunctionConstraintCode : public ConstraintCode {
     }
   }
 
-  void simplify() override {}
-
   std::string toStr() override {
     std::string result = "";
+    bool multi = false;
     for (ConstraintCode *c : conjuncts) {
-      if (result != "") {
-        result += " && ";
+      std::string s = c->toStr();
+      if (s != "true") {
+        if (result != "") {
+          result += " && ";
+          multi = true;
+        }
+        result += s;
       }
-      result += c->toStr();
     }
     if (result == "") {
       return "true";
+    } else if (!multi) {
+      return result;
     } else {
       return "(" + result + ")";
     }
@@ -1163,18 +1329,23 @@ struct DisjunctionConstraintCode : public ConstraintCode {
     }
   }
 
-  void simplify() override {}
-
   std::string toStr() override {
     std::string result = "";
+    bool multi = false;
     for (ConstraintCode *d : disjuncts) {
-      if (result != "") {
-        result += " || ";
+      std::string s = d->toStr();
+      if (s != "false") {
+        if (result != "") {
+          result += " || ";
+          multi = true;
+        }
+        result += s;
       }
-      result += d->toStr();
     }
     if (result == "") {
       return "false";
+    } else if (!multi) {
+      return result;
     } else {
       return "(" + result + ")";
     }
@@ -1272,9 +1443,12 @@ public:
     } else if (std::holds_alternative<FunctionConstraint>(con)) {
       FunctionConstraint f = std::get<FunctionConstraint>(con);
       return CLASS_STRING(f.toStr());
-    } else {
+    } else if (std::holds_alternative<MemberConstraint>(con)) {
       MemberConstraint m = std::get<MemberConstraint>(con);
       return CLASS_STRING(m.toStr());
+    } else {
+      TypeTraitConstraint t = std::get<TypeTraitConstraint>(con);
+      return CLASS_STRING(t.toStr());
     }
   }
 
@@ -1369,6 +1543,13 @@ public:
       }
       mcc->returnType = resolveType(m.returnType);
       CHECK_RETURN(mcc);
+    } else if (std::holds_alternative<TypeTraitConstraint>(con)) {
+      TypeTraitConstraint t = std::get<TypeTraitConstraint>(con);
+      auto tcc = new TypeTraitConstraintCode();
+      tcc->neg = t.neg;
+      tcc->trait = t.predicate;
+      tcc->type = resolveType(t.ttpdecl);
+      CHECK_RETURN(tcc);
     } else {
       auto dummy = new ConstraintCode();
       CHECK_RETURN(dummy);
@@ -1525,7 +1706,7 @@ namespace namedrequirements {
         return match<FunctionConstraint>(functionPatterns, std::get<FunctionConstraint>(c));
       } else if (std::holds_alternative<MemberConstraint>(c)) {
         return match<MemberConstraint>(memberPatterns, std::get<MemberConstraint>(c));
-      } else {
+      } else { // TypeTraitConstraint
         return false;
       }
     }
@@ -1723,7 +1904,6 @@ public:
       if (status[ttpd] == 0) { // not visited
         status[ttpd] = 1;
         auto conj = pool.poolNew<Conjunction>();
-        bool conjunctionTriviallyFalse = false;
         for (const auto &con : visitor.constraintMap.at(ttpd)) {
           if (std::holds_alternative<UnaryConstraint>(con)) {
             auto u = pool.poolNew<Atomic>(std::get<UnaryConstraint>(con));
@@ -1737,10 +1917,12 @@ public:
           } else if (std::holds_alternative<FunctionConstraint>(con)) {
             auto f = pool.poolNew<Atomic>(std::get<FunctionConstraint>(con));
             conj->addConjunct(f);
+          } else if (std::holds_alternative<TypeTraitConstraint>(con)) {
+            auto t = pool.poolNew<Atomic>(std::get<TypeTraitConstraint>(con));
+            conj->addConjunct(t);
           } else if (std::holds_alternative<CallConstraint>(con)) {
             auto c = std::get<CallConstraint>(con);
             auto disj = pool.poolNew<Disjunction>();
-            bool disjunctionTriviallyTrue = false;
             for (const auto &cc : c.dependencies) {
               if (std::holds_alternative<TypeBox>(cc)) {
                 auto a = pool.poolNew<Atomic>(ConcreteConstraint(c.selfType, std::get<TypeBox>(cc)));
@@ -1748,37 +1930,17 @@ public:
               } else if (std::holds_alternative<TemplateDependency>(cc)) {
                 const auto &cte = std::get<TemplateDependency>(cc);
                 if (auto f = dfs(cte.ttpdecl)) {
-                  if (f->literalStatus() == -1) {
-                    disj->addDisjunct(f, cte.backMap);
-                  } else if (f->literalStatus() == 0) {
-                    ;
-                  } else {
-                    disjunctionTriviallyTrue = true;
-                    break;
-                  }
+                  disj->addDisjunct(f, cte.backMap);
                 } else { // recursive dependency
-                  disjunctionTriviallyTrue = true;
-                  break;
+                  auto t = pool.poolNew<Literal>(true);
+                  disj->addDisjunct(t);
                 }
               }
             }
-            if (disjunctionTriviallyTrue) {
-              continue;
-            } else if (disj->disjuncts.size() == 0) {
-              conjunctionTriviallyFalse = true;
-              break;
-            } else {
-              conj->addConjunct(disj);
-            }
+            conj->addConjunct(disj);
           }
         }
-        if (conjunctionTriviallyFalse) {
-          results[ttpd] = pool.poolNew<Literal>(false);
-        } else if (conj->conjuncts.size() == 0) {
-          results[ttpd] = pool.poolNew<Literal>(true);
-        } else {
-          results[ttpd] = conj;
-        }
+        results[ttpd] = conj;
         status[ttpd] = 2;
         return results.at(ttpd);
       } else if (status[ttpd] == 1) { // on stack
@@ -1803,7 +1965,6 @@ public:
       auto ftdecl = fromTemplateTypeParmDeclToFunctionTemplateDecl(ttpdecl, &context);
       if (ftdecl) {
         os << "[" << ftdecl->getNameAsString() << ":" << ftdecl->getAsFunction()->getNumParams() << ", " << ttpdecl->getNameAsString() << "]\n";
-        os << "\tRaw constraint: " << f->toStr() << '\n';
         std::vector<const BackMap*> backMaps;
         auto cc = f->printConstraintCode(backMaps);
         os << "\tPrinted code: " << cc->toStr() << '\n';
