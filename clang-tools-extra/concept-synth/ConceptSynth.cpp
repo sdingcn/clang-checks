@@ -1990,7 +1990,9 @@ namespace namedrequirements {
           BinaryConstraint("<"),
           BinaryConstraint(">"),
           BinaryConstraint("<="),
-          BinaryConstraint(">=")
+          BinaryConstraint(">="),
+          BinaryConstraint("+="),
+          BinaryConstraint("-=")
         }),
         [](const Instantiation &i){ return true; }
       }
@@ -2140,34 +2142,24 @@ public:
       }
     }
 
-    std::vector<std::string> prints;
     for (const auto &kv : results) {
-      std::ostringstream os;
       auto ttpdecl = kv.first;
       auto f = kv.second;
       auto ftdecl = fromTemplateTypeParmDeclToFunctionTemplateDecl(ttpdecl, &context);
       if (ftdecl) {
-        os << "[" << ftdecl->getNameAsString() << ":" << ftdecl->getAsFunction()->getNumParams() << ":" << ttpdecl->getNameAsString() << "]\n";
-        os << "\tRaw Constraint: " << f->toStr() << "\n";
+        llvm::outs() << "[" << ftdecl->getNameAsString() << ":" << ftdecl->getAsFunction()->getNumParams() << ":" << ttpdecl->getNameAsString() << "]\n";
+        llvm::outs() << "\tRaw Constraint: " << f->toStr() << "\n";
         std::vector<const BackMap*> backMaps;
         auto cc = f->printConstraintCode(backMaps);
-        os << "\tPrinted code: " << cc->toStr() << "\n";
+        llvm::outs() << "\tPrinted code: " << cc->toStr() << "\n";
         delete cc;
-        os << "\tInferred constraint:";
+        llvm::outs() << "\tInferred constraint:";
         const auto &inferred = infer(f, visitor.instantiationMap[ttpdecl]);
         for (const auto &con : inferred) {
-          os << " " << con;
+          llvm::outs() << " " << con;
         }
-        os << "\n";
+        llvm::outs() << "\n";
       }
-      auto s = os.str();
-      if (s.size() > 0) {
-        prints.push_back(s);
-      }
-    }
-    std::sort(prints.begin(), prints.end());
-    for (const auto &s : prints) {
-      llvm::outs() << s;
     }
   }
 
