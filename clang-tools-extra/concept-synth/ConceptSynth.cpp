@@ -928,6 +928,13 @@ public:
   explicit FindTargetVisitor(ASTContext *context) : context(context) {}
 
   bool VisitFunctionTemplateDecl(FunctionTemplateDecl *ftdecl) {
+    // ignore deduction guides
+    if (
+      ftdecl->getKind() == Decl::Kind::CXXDeductionGuide ||
+      (ftdecl->getAsFunction() && ftdecl->getAsFunction()->getKind() == Decl::Kind::CXXDeductionGuide)
+    ) {
+      return true;
+    }
     // exclude class / instance members
     if (ftdecl->isCXXClassMember() || ftdecl->isCXXInstanceMember()) {
       return true;
@@ -1232,16 +1239,20 @@ struct ConstraintCode {
 
   virtual ~ConstraintCode() {}
 
-  virtual bool isValid() {
+  virtual bool isValid() const {
     return true;
   }
 
-  virtual std::string toStr() {
+  virtual std::string toStr() const {
     return "";
   }
 
-  virtual STag getSTag() {
+  virtual STag getSTag() const {
     return STag::E;
+  }
+
+  virtual std::vector<ConstraintCode*> getSubtrees() const {
+    return {};
   }
 
   virtual ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const {
@@ -1258,16 +1269,20 @@ struct LiteralConstraintCode : public ConstraintCode {
 
   ~LiteralConstraintCode() override {}
 
-  bool isValid() override {
+  bool isValid() const override {
     return value != "";
   }
 
-  std::string toStr() override {
+  std::string toStr() const override {
     return value;
   }
 
-  STag getSTag() override {
+  STag getSTag() const override {
     return STag::A;
+  }
+
+  std::vector<ConstraintCode*> getSubtrees() const override {
+    return {};
   }
 
   ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
@@ -1288,16 +1303,20 @@ struct ConcreteConstraintCode : public ConstraintCode {
 
   ~ConcreteConstraintCode() override {}
 
-  bool isValid() override {
+  bool isValid() const override {
     return selfType != "" && targetType != "";
   }
 
-  std::string toStr() override {
+  std::string toStr() const override {
     return stringFormat("std::convertible_to<#, #>", {selfType, targetType});
   }
 
-  STag getSTag() override {
+  STag getSTag() const override {
     return STag::A;
+  }
+
+  std::vector<ConstraintCode*> getSubtrees() const override {
+    return {};
   }
 
   ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
@@ -1320,16 +1339,20 @@ struct TypeTraitConstraintCode : public ConstraintCode {
 
   ~TypeTraitConstraintCode() override {}
 
-  bool isValid() override {
+  bool isValid() const override {
     return selfType != "" && possiblyNegatedPredicate != "";
   }
 
-  std::string toStr() override {
+  std::string toStr() const override {
     return stringFormat("#<#>::value", {possiblyNegatedPredicate, selfType});
   }
 
-  STag getSTag() override {
+  STag getSTag() const override {
     return STag::A;
+  }
+
+  std::vector<ConstraintCode*> getSubtrees() const override {
+    return {};
   }
 
   ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
@@ -1352,17 +1375,21 @@ struct UnaryConstraintCode : public ConstraintCode {
 
   ~UnaryConstraintCode() override {}
 
-  bool isValid() override {
+  bool isValid() const override {
     return selfType != "" && operatorName != "" && position > -1;
   }
 
-  std::string toStr() override {
+  std::string toStr() const override {
     auto expr = ((position == 0) ? ("x0" + operatorName) : (operatorName + "x0"));
     return stringFormat("requires (# x0) { #; }", {selfType, expr});
   }
 
-  STag getSTag() override {
+  STag getSTag() const override {
     return STag::A;
+  }
+
+  std::vector<ConstraintCode*> getSubtrees() const override {
+    return {};
   }
 
   ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
@@ -1387,20 +1414,24 @@ struct BinaryConstraintCode : public ConstraintCode {
 
   ~BinaryConstraintCode() override {}
 
-  bool isValid() override {
+  bool isValid() const override {
     return selfType != "" && operatorName != "" && position > -1 &&
            otherType != "" && otherExpr != "";
   }
 
-  std::string toStr() override {
+  std::string toStr() const override {
     auto expr = ((position == 0) ?
                  ("x0 " + operatorName + " " + otherExpr) :
                  (otherExpr + " " + operatorName + " x0"));
     return stringFormat("requires (# x0, # x1) { #; }", {selfType, otherType, expr});
   }
 
-  STag getSTag() override {
+  STag getSTag() const override {
     return STag::A;
+  }
+
+  std::vector<ConstraintCode*> getSubtrees() const override {
+    return {};
   }
 
   ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
@@ -1429,7 +1460,7 @@ struct FunctionConstraintCode : public ConstraintCode {
 
   ~FunctionConstraintCode() override {}
 
-  bool isValid() override {
+  bool isValid() const override {
     if (selfType == "") {
       return false;
     }
@@ -1447,7 +1478,7 @@ struct FunctionConstraintCode : public ConstraintCode {
     return true;
   }
 
-  std::string toStr() override {
+  std::string toStr() const override {
     int np = parameterTypes.size();
     std::string pattern = "requires (# f";
     for (int i = 0; i < np; i++) {
@@ -1474,8 +1505,12 @@ struct FunctionConstraintCode : public ConstraintCode {
     return stringFormat(pattern, elements);
   }
 
-  STag getSTag() override {
+  STag getSTag() const override {
     return STag::A;
+  }
+
+  std::vector<ConstraintCode*> getSubtrees() const override {
+    return {};
   }
 
   ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
@@ -1502,7 +1537,7 @@ struct MemberConstraintCode : public ConstraintCode {
 
   ~MemberConstraintCode() override {}
 
-  bool isValid() override {
+  bool isValid() const override {
     if (selfType == "") {
       return false;
     }
@@ -1523,7 +1558,7 @@ struct MemberConstraintCode : public ConstraintCode {
     return true;
   }
 
-  std::string toStr() override {
+  std::string toStr() const override {
     int np = parameterTypes.size();
     std::string pattern = "requires (# o";
     for (int i = 0; i < np; i++) {
@@ -1555,8 +1590,12 @@ struct MemberConstraintCode : public ConstraintCode {
     return stringFormat(pattern, elements);
   }
 
-  STag getSTag() override {
+  STag getSTag() const override {
     return STag::A;
+  }
+
+  std::vector<ConstraintCode*> getSubtrees() const override {
+    return {};
   }
 
   ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
@@ -1587,7 +1626,16 @@ struct ConjunctionConstraintCode : public ConstraintCode {
 
   ~ConjunctionConstraintCode() override { /* don't release children's memory here */ }
 
-  std::string toStr() override {
+  bool isValid() const override {
+    for (auto c : conjuncts) {
+      if (!(c->isValid())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  std::string toStr() const override {
     std::string result = "";
     for (ConstraintCode *c : conjuncts) {
       if (result != "") {
@@ -1602,8 +1650,12 @@ struct ConjunctionConstraintCode : public ConstraintCode {
     }
   }
 
-  STag getSTag() override {
+  STag getSTag() const override {
     return STag::C;
+  }
+
+  std::vector<ConstraintCode*> getSubtrees() const override {
+    return conjuncts;
   }
 
   ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
@@ -1611,22 +1663,32 @@ struct ConjunctionConstraintCode : public ConstraintCode {
     int cnt = 0;
     std::unordered_set<std::string> deduplicate;
     for (auto c : conjuncts) {
+      std::vector<ConstraintCode*> targets;
       auto sc = c->getSimplified(cpool);
-      std::string s = sc->toStr();
-      if (s == "true") {
-        continue;
+      if (sc->getSTag() == STag::C) {
+        for (auto child : sc->getSubtrees()) {
+          targets.push_back(child);
+        }
+      } else {
+        targets.push_back(sc);
       }
-      if (s == "false") {
-        auto l = cpool.poolNew<LiteralConstraintCode>();
-        l->value = "false";
-        return l;
+      for (auto target : targets) {
+        std::string s = target->toStr();
+        if (s == "true") {
+          continue;
+        }
+        if (s == "false") {
+          auto l = cpool.poolNew<LiteralConstraintCode>();
+          l->value = "false";
+          return l;
+        }
+        if (deduplicate.count(s) > 0) {
+          continue;
+        }
+        newConjuncts.push_back(target);
+        cnt++;
+        deduplicate.insert(s);
       }
-      if (deduplicate.count(s) > 0) {
-        continue;
-      }
-      newConjuncts.push_back(sc);
-      cnt++;
-      deduplicate.insert(s);
     }
     if (cnt == 0) {
       auto l = cpool.poolNew<LiteralConstraintCode>();
@@ -1653,11 +1715,20 @@ struct DisjunctionConstraintCode : public ConstraintCode {
 
   ~DisjunctionConstraintCode() override { /* don't release children's memory here */ }
 
-  std::string toStr() override {
+  bool isValid() const override {
+    for (auto c : disjuncts) {
+      if (!(c->isValid())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  std::string toStr() const override {
     std::string result = "";
     for (ConstraintCode *d : disjuncts) {
       if (result != "") {
-        result += " &&\n";
+        result += " ||\n";
       }
       result += d->toStr();
     }
@@ -1668,8 +1739,12 @@ struct DisjunctionConstraintCode : public ConstraintCode {
     }
   }
 
-  STag getSTag() override {
+  STag getSTag() const override {
     return STag::D;
+  }
+
+  std::vector<ConstraintCode*> getSubtrees() const override {
+    return disjuncts;
   }
 
   ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
@@ -1677,22 +1752,32 @@ struct DisjunctionConstraintCode : public ConstraintCode {
     int cnt = 0;
     std::unordered_set<std::string> deduplicate;
     for (auto d : disjuncts) {
+      std::vector<ConstraintCode*> targets;
       auto sd = d->getSimplified(cpool);
-      std::string s = sd->toStr();
-      if (s == "false") {
-        continue;
+      if (sd->getSTag() == STag::D) {
+        for (auto child : sd->getSubtrees()) {
+          targets.push_back(child);
+        }
+      } else {
+        targets.push_back(sd);
       }
-      if (s == "true") {
-        auto l = cpool.poolNew<LiteralConstraintCode>();
-        l->value = "true";
-        return l;
+      for (auto target : targets) {
+        std::string s = target->toStr();
+        if (s == "false") {
+          continue;
+        }
+        if (s == "true") {
+          auto l = cpool.poolNew<LiteralConstraintCode>();
+          l->value = "true";
+          return l;
+        }
+        if (deduplicate.count(s) > 0) {
+          continue;
+        }
+        newDisjuncts.push_back(target);
+        cnt++;
+        deduplicate.insert(s);
       }
-      if (deduplicate.count(s) > 0) {
-        continue;
-      }
-      newDisjuncts.push_back(sd);
-      cnt++;
-      deduplicate.insert(s);
     }
     if (cnt == 0) {
       auto l = cpool.poolNew<LiteralConstraintCode>();
@@ -2368,18 +2453,19 @@ public:
       auto ftdecl = fromTemplateTypeParmDeclToFunctionTemplateDecl(ttpdecl, &context);
       if (ftdecl) {
         llvm::outs() << "[" << ftdecl->getNameAsString() << ":" << ftdecl->getAsFunction()->getNumParams() << ":" << ttpdecl->getNameAsString() << "]\n";
-        // llvm::outs() << "\tRaw Constraint: " << f->toStr() << "\n";
+        llvm::outs() << "SourceLocation:\n" << getFullSourceLocationAsString(ftdecl, &context) << "\n";
         Pool<ConstraintCode> cpool;
         std::vector<const BackMap*> backMaps;
         auto cc = f->printConstraintCode(backMaps, cpool);
         auto scc = cc->getSimplified(cpool);
-        llvm::outs() << "Printed code:\n" << scc->toStr() << "\n";
+        llvm::outs() << "Printed code (original):\n" << cc->toStr() << "\n";
+        llvm::outs() << "Printed code (optimized):\n" << scc->toStr() << "\n";
         llvm::outs() << "Inferred constraint:\n";
         const auto &inferred = infer(f, visitor.instantiationMap[ttpdecl]);
         for (const auto &con : inferred) {
-          llvm::outs() << " " << con;
+          llvm::outs() << con << " ";
         }
-        llvm::outs() << "\n";
+        llvm::outs() << "\n\n";
       }
     }
   }
