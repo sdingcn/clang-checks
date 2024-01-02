@@ -45,7 +45,9 @@ static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 // A help message for this specific tool can be added afterwards.
 static cl::extrahelp MoreHelp("\nMore help text...\n");
 
-// Core code start
+/******************************************************
+ * helper functions
+ ******************************************************/
 
 std::string interpolate(const std::vector<std::string> &strs) {
   std::string result;
@@ -75,6 +77,18 @@ std::string stringFormat(const std::string &pattern, const std::vector<std::stri
     }
   }
   return result;
+}
+
+std::string replaceAll(const std::string &s, char p, const std::string &w) {
+  std::string ret;
+  for (char c : s) {
+    if (c == p) {
+      ret += w;
+    } else {
+      ret += c;
+    }
+  }
+  return ret;
 }
 
 std::string getFullSourceLocationAsString(std::variant<const Decl*, const Stmt*> node, ASTContext *ctx) {
@@ -180,25 +194,6 @@ std::optional<std::string> getTSTName(const TemplateSpecializationType *tst) {
   }
 }
 
-struct VariableUseStmt {
-  VariableUseStmt(const TemplateTypeParmDecl *tt, const Stmt *v, const Stmt *s, ASTContext *c)
-    : ttpdecl(tt), var(v), stmt(s), ctx(c) {}
-
-  std::string toStr() const {
-    std::string content = interpolate({
-      ttpdecl->getNameAsString(),
-      getFullSourceLocationAsString(var, ctx),
-      getFullSourceLocationAsString(stmt, ctx)
-    });
-    return CLASS_STRING(content);
-  }
-
-  const TemplateTypeParmDecl *ttpdecl;
-  const Stmt *var;
-  const Stmt *stmt;
-  ASTContext *ctx;
-};
-
 const Expr *getEnableIfBoolExpr(QualType t) {
   auto ct = t.getCanonicalType(); // desugar std::enable_if_t
   if (auto dnt = ct->getAs<DependentNameType>()) {
@@ -220,6 +215,28 @@ const Expr *getEnableIfBoolExpr(QualType t) {
   }
   return nullptr;
 }
+
+bool isMoveOrForward(const Stmt *s) {
+  if (auto callExpr = dyn_cast<CallExpr>(s)) {
+    if (callExpr->getNumArgs() == 1) {
+      if (auto callee = dyn_cast<UnresolvedLookupExpr>(callExpr->getCallee())) {
+        auto name = callee->getName().getAsString();
+        if (auto qu = callee->getQualifier()) {
+          if (auto ns = qu->getAsNamespace()) {
+            if (ns->getNameAsString() == "std" && (name == "move" || name == "forward")) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/******************************************************
+ * constraint classes
+ ******************************************************/
 
 struct TypeTraitExpression {
   TypeTraitExpression(bool n, std::string p)
@@ -318,114 +335,6 @@ std::optional<TypeTraitConstraint> tryTraitConstraint(
   return std::nullopt;
 }
 
-bool isMoveOrForward(const Stmt *s) {
-  if (auto callExpr = dyn_cast<CallExpr>(s)) {
-    if (callExpr->getNumArgs() == 1) {
-      if (auto callee = dyn_cast<UnresolvedLookupExpr>(callExpr->getCallee())) {
-        auto name = callee->getName().getAsString();
-        if (auto qu = callee->getQualifier()) {
-          if (auto ns = qu->getAsNamespace()) {
-            if (ns->getNameAsString() == "std" && (name == "move" || name == "forward")) {
-              return true;
-            }
-          }
-        }
-      }
-    }
-  }
-  return false;
-}
-
-class TraverseFunctionTemplateVisitor
-    : public RecursiveASTVisitor<TraverseFunctionTemplateVisitor> {
-public:
-  explicit TraverseFunctionTemplateVisitor(ASTContext *c, FunctionTemplateDecl *f)
-    : context(c), functionTemplateDecl(f) {}
-
-  // Get instantiations
-  bool VisitFunctionDecl(FunctionDecl *fdecl) {
-    if (fdecl->isTemplateInstantiation()) {
-      templateArgumentLists.push_back(fdecl->getTemplateSpecializationArgs());
-    }
-    return true;
-  }
-
-  // Get template body usages
-  bool VisitDeclRefExpr(DeclRefExpr *var) {
-    // ignore compound template types like T*, std::vector<T>, etc.
-    if (auto ttpdecl = fromQualTypeToTemplateTypeParmDecl(
-      var->getType(),
-      functionTemplateDecl->getTemplateParameters(),
-      context
-    )) {
-      if (auto ps = getFirstStmtParent(var, context)) {
-        variableUseStmts.push_back(VariableUseStmt(ttpdecl, var, ps, context));
-        // { special case: ignore std::move and std::forward
-        VariableUseStmt &ref = variableUseStmts.back();
-        if (isMoveOrForward(ref.stmt)) {
-          if (auto pps = getFirstStmtParent(ref.stmt, ref.ctx)) {
-            ref.var = ref.stmt;
-            ref.stmt = pps;
-          } else {
-            variableUseStmts.pop_back();
-          }
-        }
-        // special case }
-      }
-    }
-    return true;
-  }
-
-  // Get template body trait constraints
-  bool visitStaticAssertDecl(StaticAssertDecl *sad) {
-    auto expr = sad->getAssertExpr();
-    auto tc = tryTraitConstraint(
-      expr,
-      functionTemplateDecl->getTemplateParameters(),
-      context
-    );
-    if (tc.has_value()) {
-      typeTraitConstraints.push_back(tc.value());
-    }
-    return true;
-  }
-
-  bool shouldVisitTemplateInstantiations() const {
-    return true;
-  }
-
-  std::vector<const TemplateArgumentList *> templateArgumentLists;
-  std::vector<VariableUseStmt> variableUseStmts;
-  std::vector<TypeTraitConstraint> typeTraitConstraints;
-
-private:
-
-  ASTContext *context;
-  FunctionTemplateDecl *functionTemplateDecl;
-};
-
-struct Instantiation {
-  Instantiation(QualType t)
-    : type(t) {}
-
-  bool operator== (const Instantiation &other) const {
-    return type == other.type;
-  }
-
-  std::string toStr() const {
-    return CLASS_STRING(type.getAsString());
-  }
-
-  QualType type;
-};
-
-template <>
-struct std::hash<Instantiation> {
-  std::size_t operator() (const Instantiation &i) const {
-    return std::hash<std::string>()(i.toStr());
-  }
-};
-
 // currently support non-dependent types and template type parameter types
 using SupportedType = std::variant<QualType, const TemplateTypeParmDecl*>;
 
@@ -471,37 +380,6 @@ std::string optionalSupportedTypeToString(const std::optional<SupportedType> &t)
   } else {
     return "_";
   }
-}
-
-std::unordered_map<std::string, std::function<bool(const Stmt*, const Stmt*)>> simpleInferences {
-  {"bool", [](const Stmt *s, const Stmt *p) -> bool {
-    if (auto ifStmt = dyn_cast<IfStmt>(p)) {
-      if (ifStmt->getCond() == s) {
-        return true;
-      }
-    } else if (auto whileStmt = dyn_cast<WhileStmt>(p)) {
-      if (whileStmt->getCond() == s) {
-        return true;
-      }
-    } else if (auto forStmt = dyn_cast<ForStmt>(p)) {
-      if (forStmt->getCond() == s) {
-        return true;
-      }
-    }
-    return false;
-  }}
-};
-
-std::optional<std::string> simplyInfer(const Expr *expr, ASTContext *ctx) {
-  auto parent = getFirstStmtParent(expr, ctx);
-  if (parent) {
-    for (const auto &[type, checker] : simpleInferences) {
-      if (checker(expr, parent)) {
-        return type;
-      }
-    }
-  }
-  return std::nullopt;
 }
 
 struct UnaryConstraint {
@@ -599,7 +477,20 @@ std::optional<Argum> tryArgum(
 struct BinaryConstraint {
   BinaryConstraint(std::string o, std::optional<SupportedType> s = std::nullopt,
                    int p = -1, std::optional<Argum> e = std::nullopt)
-    : op(std::move(o)), selfType(s), pos(p), otherExpr(e) {}
+    : op(std::move(o)), selfType(s), pos(p), otherExpr(e) {
+    // normalization
+    if (e.has_value() && std::holds_alternative<DependentExpression>(e.value())) {
+      const DependentExpression &de = std::get<DependentExpression>(e.value());
+      if (de.op == "") { // de is just a variable
+        if (s.has_value() && std::holds_alternative<const TemplateTypeParmDecl*>(s.value())) {
+          if (de.ttpdecl == std::get<const TemplateTypeParmDecl*>(s.value())) {
+            // lhs and rhs are symmetric
+            pos = 0;
+          }
+        }
+      }
+    }
+  }
 
   bool operator== (const BinaryConstraint &other) const {
     return op == other.op && selfType == other.selfType && pos == other.pos && otherExpr == other.otherExpr;
@@ -876,23 +767,161 @@ using Constraint = std::variant<
   ConcreteConstraint
 >;
 
-std::string constraintToString(const Constraint& c) {
-  if (std::holds_alternative<TypeTraitConstraint>(c)) {
-    return std::get<TypeTraitConstraint>(c).toStr();
-  } else if (std::holds_alternative<UnaryConstraint>(c)) {
-    return std::get<UnaryConstraint>(c).toStr();
-  } else if (std::holds_alternative<BinaryConstraint>(c)) {
-    return std::get<BinaryConstraint>(c).toStr();
-  } else if (std::holds_alternative<FunctionConstraint>(c)) {
-    return std::get<FunctionConstraint>(c).toStr();
-  } else if (std::holds_alternative<MemberConstraint>(c)) {
-    return std::get<MemberConstraint>(c).toStr();
-  } else if (std::holds_alternative<CallConstraint>(c)) {
-    return std::get<CallConstraint>(c).toStr();
-  } else {
-    return std::get<ConcreteConstraint>(c).toStr();
+/******************************************************
+ * instantiation class
+ ******************************************************/
+
+struct Instantiation {
+  Instantiation(QualType t)
+    : type(t) {}
+
+  bool operator== (const Instantiation &other) const {
+    return type == other.type;
   }
+
+  std::string toStr() const {
+    return CLASS_STRING(type.getAsString());
+  }
+
+  QualType type;
+};
+
+template <>
+struct std::hash<Instantiation> {
+  std::size_t operator() (const Instantiation &i) const {
+    return std::hash<std::string>()(i.toStr());
+  }
+};
+
+/******************************************************
+ * simple inference
+ ******************************************************/
+
+std::unordered_map<std::string, std::function<bool(const Stmt*, const Stmt*)>> simpleInferences {
+  {"bool", [](const Stmt *s, const Stmt *p) -> bool {
+    if (auto ifStmt = dyn_cast<IfStmt>(p)) {
+      if (ifStmt->getCond() == s) {
+        return true;
+      }
+    } else if (auto whileStmt = dyn_cast<WhileStmt>(p)) {
+      if (whileStmt->getCond() == s) {
+        return true;
+      }
+    } else if (auto forStmt = dyn_cast<ForStmt>(p)) {
+      if (forStmt->getCond() == s) {
+        return true;
+      }
+    }
+    return false;
+  }}
+};
+
+std::optional<std::string> simplyInfer(const Expr *expr, ASTContext *ctx) {
+  auto parent = getFirstStmtParent(expr, ctx);
+  if (parent) {
+    for (const auto &[type, checker] : simpleInferences) {
+      if (checker(expr, parent)) {
+        return type;
+      }
+    }
+  }
+  return std::nullopt;
 }
+
+/******************************************************
+ * individual function template visitor
+ ******************************************************/
+
+struct VariableUseStmt {
+  VariableUseStmt(const TemplateTypeParmDecl *tt, const Stmt *v, const Stmt *s, ASTContext *c)
+    : ttpdecl(tt), var(v), stmt(s), ctx(c) {}
+
+  std::string toStr() const {
+    std::string content = interpolate({
+      ttpdecl->getNameAsString(),
+      getFullSourceLocationAsString(var, ctx),
+      getFullSourceLocationAsString(stmt, ctx)
+    });
+    return CLASS_STRING(content);
+  }
+
+  const TemplateTypeParmDecl *ttpdecl;
+  const Stmt *var;
+  const Stmt *stmt;
+  ASTContext *ctx;
+};
+
+class TraverseFunctionTemplateVisitor
+    : public RecursiveASTVisitor<TraverseFunctionTemplateVisitor> {
+public:
+  explicit TraverseFunctionTemplateVisitor(ASTContext *c, FunctionTemplateDecl *f)
+    : context(c), functionTemplateDecl(f) {}
+
+  // Get instantiations
+  bool VisitFunctionDecl(FunctionDecl *fdecl) {
+    if (fdecl->isTemplateInstantiation()) {
+      templateArgumentLists.push_back(fdecl->getTemplateSpecializationArgs());
+    }
+    return true;
+  }
+
+  // Get template body usages
+  bool VisitDeclRefExpr(DeclRefExpr *var) {
+    // ignore compound template types like T*, std::vector<T>, etc.
+    if (auto ttpdecl = fromQualTypeToTemplateTypeParmDecl(
+      var->getType(),
+      functionTemplateDecl->getTemplateParameters(),
+      context
+    )) {
+      if (auto ps = getFirstStmtParent(var, context)) {
+        variableUseStmts.push_back(VariableUseStmt(ttpdecl, var, ps, context));
+        // { special case: ignore std::move and std::forward
+        VariableUseStmt &ref = variableUseStmts.back();
+        if (isMoveOrForward(ref.stmt)) {
+          if (auto pps = getFirstStmtParent(ref.stmt, ref.ctx)) {
+            ref.var = ref.stmt;
+            ref.stmt = pps;
+          } else {
+            variableUseStmts.pop_back();
+          }
+        }
+        // special case }
+      }
+    }
+    return true;
+  }
+
+  // Get template body trait constraints
+  bool visitStaticAssertDecl(StaticAssertDecl *sad) {
+    auto expr = sad->getAssertExpr();
+    auto tc = tryTraitConstraint(
+      expr,
+      functionTemplateDecl->getTemplateParameters(),
+      context
+    );
+    if (tc.has_value()) {
+      typeTraitConstraints.push_back(tc.value());
+    }
+    return true;
+  }
+
+  bool shouldVisitTemplateInstantiations() const {
+    return true;
+  }
+
+  std::vector<const TemplateArgumentList *> templateArgumentLists;
+  std::vector<VariableUseStmt> variableUseStmts;
+  std::vector<TypeTraitConstraint> typeTraitConstraints;
+
+private:
+
+  ASTContext *context;
+  FunctionTemplateDecl *functionTemplateDecl;
+};
+
+/******************************************************
+ * translation unit visitor
+ ******************************************************/
 
 class FindTargetVisitor : public RecursiveASTVisitor<FindTargetVisitor> {
 public:
@@ -1152,6 +1181,48 @@ using AtomicConstraint = std::variant<
   MemberConstraint
 >;
 
+/******************************************************
+* memory management
+*******************************************************/
+
+template <typename B>
+class Pool {
+public:
+  Pool() = default;
+
+  Pool(const Pool &p) = delete;
+
+  Pool &operator= (const Pool &p) = delete;
+
+  ~Pool() {
+    for (auto ptr : pointers) {
+      delete ptr;
+    }
+  }
+
+  template <typename D, typename... Args>
+  D *poolNew(Args&&... args) {
+    auto ptr = new D(std::forward<Args>(args)...);
+    pointers.push_back(ptr);
+    return ptr;
+  }
+
+private:
+  std::vector<B*> pointers;
+};
+
+/******************************************************
+ * code classes
+ * each analyzed function template gets its own separated code tree
+ ******************************************************/
+// code's structrue tag
+enum class STag {
+  E, // error
+  A, // atom
+  C, // conjunction
+  D  // disjunction
+};
+
 struct ConstraintCode {
   ConstraintCode() = default;
 
@@ -1167,6 +1238,14 @@ struct ConstraintCode {
 
   virtual std::string toStr() {
     return "";
+  }
+
+  virtual STag getSTag() {
+    return STag::E;
+  }
+
+  virtual ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const {
+    return nullptr;
   }
 };
 
@@ -1187,6 +1266,16 @@ struct LiteralConstraintCode : public ConstraintCode {
     return value;
   }
 
+  STag getSTag() override {
+    return STag::A;
+  }
+
+  ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
+    auto l = cpool.poolNew<LiteralConstraintCode>();
+    l->value = value;
+    return l;
+  }
+
   std::string value;
 };
 
@@ -1205,6 +1294,17 @@ struct ConcreteConstraintCode : public ConstraintCode {
 
   std::string toStr() override {
     return stringFormat("std::convertible_to<#, #>", {selfType, targetType});
+  }
+
+  STag getSTag() override {
+    return STag::A;
+  }
+
+  ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
+    auto c = cpool.poolNew<ConcreteConstraintCode>();
+    c->selfType = selfType;
+    c->targetType = targetType;
+    return c;
   }
 
   std::string selfType;
@@ -1228,6 +1328,17 @@ struct TypeTraitConstraintCode : public ConstraintCode {
     return stringFormat("#<#>::value", {possiblyNegatedPredicate, selfType});
   }
 
+  STag getSTag() override {
+    return STag::A;
+  }
+
+  ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
+    auto t = cpool.poolNew<TypeTraitConstraintCode>();
+    t->selfType = selfType;
+    t->possiblyNegatedPredicate = possiblyNegatedPredicate;
+    return t;
+  }
+
   std::string selfType;
   std::string possiblyNegatedPredicate;
 };
@@ -1246,8 +1357,20 @@ struct UnaryConstraintCode : public ConstraintCode {
   }
 
   std::string toStr() override {
-    std::string expr = ((position == 0) ? ("x0" + operatorName) : (operatorName + "x0"));
+    auto expr = ((position == 0) ? ("x0" + operatorName) : (operatorName + "x0"));
     return stringFormat("requires (# x0) { #; }", {selfType, expr});
+  }
+
+  STag getSTag() override {
+    return STag::A;
+  }
+
+  ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
+    auto u = cpool.poolNew<UnaryConstraintCode>();
+    u->selfType = selfType;
+    u->operatorName = operatorName;
+    u->position = position;
+    return u;
   }
 
   std::string selfType;
@@ -1270,10 +1393,24 @@ struct BinaryConstraintCode : public ConstraintCode {
   }
 
   std::string toStr() override {
-    std::string expr = ((position == 0) ?
-                        ("x0 " + operatorName + " " + otherExpr) :
-                        (otherExpr + " " + operatorName + " x0"));
+    auto expr = ((position == 0) ?
+                 ("x0 " + operatorName + " " + otherExpr) :
+                 (otherExpr + " " + operatorName + " x0"));
     return stringFormat("requires (# x0, # x1) { #; }", {selfType, otherType, expr});
+  }
+
+  STag getSTag() override {
+    return STag::A;
+  }
+
+  ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
+    auto b = cpool.poolNew<BinaryConstraintCode>();
+    b->selfType = selfType;
+    b->operatorName = operatorName;
+    b->position = position;
+    b->otherType = otherType;
+    b->otherExpr = otherExpr;
+    return b;
   }
 
   std::string selfType;
@@ -1335,6 +1472,19 @@ struct FunctionConstraintCode : public ConstraintCode {
     }
     elements.push_back(call);
     return stringFormat(pattern, elements);
+  }
+
+  STag getSTag() override {
+    return STag::A;
+  }
+
+  ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
+    auto f = cpool.poolNew<FunctionConstraintCode>();
+    f->selfType = selfType;
+    f->parameterTypes = parameterTypes;
+    f->args = args;
+    f->returnType = returnType;
+    return f;
   }
 
   std::string selfType;
@@ -1405,6 +1555,21 @@ struct MemberConstraintCode : public ConstraintCode {
     return stringFormat(pattern, elements);
   }
 
+  STag getSTag() override {
+    return STag::A;
+  }
+
+  ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
+    auto m = cpool.poolNew<MemberConstraintCode>();
+    m->selfType = selfType;
+    m->memberName = memberName;
+    m->isFun = isFun;
+    m->parameterTypes = parameterTypes;
+    m->args = args;
+    m->returnType = returnType;
+    return m;
+  }
+
   std::string selfType;
   std::string memberName;
   bool isFun;
@@ -1420,31 +1585,59 @@ struct ConjunctionConstraintCode : public ConstraintCode {
 
   ConjunctionConstraintCode &operator= (const ConjunctionConstraintCode &c) = delete;
 
-  ~ConjunctionConstraintCode() override {
-    for (ConstraintCode *c : conjuncts) {
-      delete c;
-    }
-  }
+  ~ConjunctionConstraintCode() override { /* don't release children's memory here */ }
 
   std::string toStr() override {
     std::string result = "";
-    bool multi = false;
     for (ConstraintCode *c : conjuncts) {
-      std::string s = c->toStr();
-      if (s != "true") {
-        if (result != "") {
-          result += " && ";
-          multi = true;
-        }
-        result += s;
+      if (result != "") {
+        result += " &&\n";
       }
+      result += c->toStr();
     }
     if (result == "") {
-      return "true";
-    } else if (!multi) {
-      return result;
+      return "(true)";
     } else {
-      return "(" + result + ")";
+      return replaceAll("(\n" + result, '\n', "\n ") + "\n)";
+    }
+  }
+
+  STag getSTag() override {
+    return STag::C;
+  }
+
+  ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
+    std::vector<ConstraintCode*> newConjuncts;
+    int cnt = 0;
+    std::unordered_set<std::string> deduplicate;
+    for (auto c : conjuncts) {
+      auto sc = c->getSimplified(cpool);
+      std::string s = sc->toStr();
+      if (s == "true") {
+        continue;
+      }
+      if (s == "false") {
+        auto l = cpool.poolNew<LiteralConstraintCode>();
+        l->value = "false";
+        return l;
+      }
+      if (deduplicate.count(s) > 0) {
+        continue;
+      }
+      newConjuncts.push_back(sc);
+      cnt++;
+      deduplicate.insert(s);
+    }
+    if (cnt == 0) {
+      auto l = cpool.poolNew<LiteralConstraintCode>();
+      l->value = "true";
+      return l;
+    } else if (cnt == 1) {
+      return newConjuncts.front();
+    } else {
+      auto c = cpool.poolNew<ConjunctionConstraintCode>();
+      c->conjuncts = newConjuncts;
+      return c;
     }
   }
 
@@ -1458,36 +1651,70 @@ struct DisjunctionConstraintCode : public ConstraintCode {
 
   DisjunctionConstraintCode &operator= (const DisjunctionConstraintCode &c) = delete;
 
-  ~DisjunctionConstraintCode() override {
-    for (ConstraintCode *d : disjuncts) {
-      delete d;
-    }
-  }
+  ~DisjunctionConstraintCode() override { /* don't release children's memory here */ }
 
   std::string toStr() override {
     std::string result = "";
-    bool multi = false;
     for (ConstraintCode *d : disjuncts) {
-      std::string s = d->toStr();
-      if (s != "false") {
-        if (result != "") {
-          result += " || ";
-          multi = true;
-        }
-        result += s;
+      if (result != "") {
+        result += " &&\n";
       }
+      result += d->toStr();
     }
     if (result == "") {
-      return "false";
-    } else if (!multi) {
-      return result;
+      return "(false)";
     } else {
-      return "(" + result + ")";
+      return replaceAll("(\n" + result, '\n', "\n ") + "\n)";
+    }
+  }
+
+  STag getSTag() override {
+    return STag::D;
+  }
+
+  ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
+    std::vector<ConstraintCode*> newDisjuncts;
+    int cnt = 0;
+    std::unordered_set<std::string> deduplicate;
+    for (auto d : disjuncts) {
+      auto sd = d->getSimplified(cpool);
+      std::string s = sd->toStr();
+      if (s == "false") {
+        continue;
+      }
+      if (s == "true") {
+        auto l = cpool.poolNew<LiteralConstraintCode>();
+        l->value = "true";
+        return l;
+      }
+      if (deduplicate.count(s) > 0) {
+        continue;
+      }
+      newDisjuncts.push_back(sd);
+      cnt++;
+      deduplicate.insert(s);
+    }
+    if (cnt == 0) {
+      auto l = cpool.poolNew<LiteralConstraintCode>();
+      l->value = "false";
+      return l;
+    } else if (cnt == 1) {
+      return newDisjuncts.front();
+    } else {
+      auto d = cpool.poolNew<DisjunctionConstraintCode>();
+      d->disjuncts = newDisjuncts;
+      return d;
     }
   }
 
   std::vector<ConstraintCode*> disjuncts;
 };
+
+/******************************************************
+ * formula classes
+ * the entire translation unit share the same formula DAG
+ * in detail: if both f<>() and g<>() calls h<>(), then both f<>() and g<>() point to h<>()'s formula
+ ******************************************************/
 
 class Formula {
 public:
@@ -1511,7 +1738,10 @@ public:
     return true;
   }
 
-  virtual ConstraintCode *printConstraintCode(std::vector<const BackMap*> &backMaps) const {
+  virtual ConstraintCode *printConstraintCode(
+    std::vector<const BackMap*> &backMaps,
+    Pool<ConstraintCode> &cpool
+  ) const {
     return nullptr;
   }
 };
@@ -1546,8 +1776,11 @@ public:
     return value;
   }
 
-  ConstraintCode *printConstraintCode(std::vector<const BackMap*> &backMaps) const override {
-    auto l = new LiteralConstraintCode();
+  ConstraintCode *printConstraintCode(
+    std::vector<const BackMap*> &backMaps,
+    Pool<ConstraintCode> &cpool
+  ) const override {
+    auto l = cpool.poolNew<LiteralConstraintCode>();
     l->value = value ? "true" : "false";
     return l;
   }
@@ -1595,7 +1828,10 @@ public:
     return has_constraint(con);
   }
 
-  ConstraintCode *printConstraintCode(std::vector<const BackMap*> &backMaps) const override {
+  ConstraintCode *printConstraintCode(
+    std::vector<const BackMap*> &backMaps,
+    Pool<ConstraintCode> &cpool
+  ) const override {
     // if printing constraint for f() and f() calls g()
     // then f() might depend on g()'s constraints
     // but g()'s constraints could be parameterized by g()'s template type parameters
@@ -1631,8 +1867,7 @@ public:
   if ((c)->isValid()) {\
     return (c);\
   } else {\
-    delete (c);\
-    auto t = new LiteralConstraintCode();\
+    auto t = cpool.poolNew<LiteralConstraintCode>();\
     t->value = "true";\
     return t;\
   }\
@@ -1640,20 +1875,20 @@ public:
 
     if (std::holds_alternative<ConcreteConstraint>(con)) {
       ConcreteConstraint c = std::get<ConcreteConstraint>(con);
-      auto ccc = new ConcreteConstraintCode();
+      auto ccc = cpool.poolNew<ConcreteConstraintCode>();
       ccc->selfType = resolveType(c.selfType);
       ccc->targetType = resolveType(c.constraintType);
       CHECK_RETURN(ccc);
     } else if (std::holds_alternative<UnaryConstraint>(con)) {
       UnaryConstraint u = std::get<UnaryConstraint>(con);
-      auto ucc = new UnaryConstraintCode();
+      auto ucc = cpool.poolNew<UnaryConstraintCode>();
       ucc->operatorName = u.op;
       ucc->position = u.pos;
       ucc->selfType = resolveType(u.selfType);
       CHECK_RETURN(ucc);
     } else if (std::holds_alternative<BinaryConstraint>(con)) {
       BinaryConstraint b = std::get<BinaryConstraint>(con);
-      auto bcc = new BinaryConstraintCode();
+      auto bcc = cpool.poolNew<BinaryConstraintCode>();
       bcc->operatorName = b.op;
       bcc->position = b.pos;
       bcc->selfType = resolveType(b.selfType);
@@ -1671,7 +1906,7 @@ public:
       CHECK_RETURN(bcc);
     } else if (std::holds_alternative<FunctionConstraint>(con)) {
       FunctionConstraint f = std::get<FunctionConstraint>(con);
-      auto fcc = new FunctionConstraintCode();
+      auto fcc = cpool.poolNew<FunctionConstraintCode>();
       fcc->selfType = resolveType(f.selfType);
       int i = 0;
       for (const auto &a : f.args) {
@@ -1698,7 +1933,7 @@ public:
       CHECK_RETURN(fcc);
     } else if (std::holds_alternative<MemberConstraint>(con)) {
       MemberConstraint m = std::get<MemberConstraint>(con);
-      auto mcc = new MemberConstraintCode();
+      auto mcc = cpool.poolNew<MemberConstraintCode>();
       mcc->memberName = m.mb;
       mcc->isFun = m.isFun;
       mcc->selfType = resolveType(m.selfType);
@@ -1727,12 +1962,12 @@ public:
       CHECK_RETURN(mcc);
     } else if (std::holds_alternative<TypeTraitConstraint>(con)) {
       TypeTraitConstraint t = std::get<TypeTraitConstraint>(con);
-      auto tcc = new TypeTraitConstraintCode();
+      auto tcc = cpool.poolNew<TypeTraitConstraintCode>();
       tcc->selfType = resolveType(t.ttpdecl);
       tcc->possiblyNegatedPredicate = (t.expr.neg ? "!" : "") + t.expr.predicate;
       CHECK_RETURN(tcc);
     } else {
-      auto dummy = new ConstraintCode();
+      auto dummy = cpool.poolNew<ConstraintCode>();
       CHECK_RETURN(dummy);
     }
 
@@ -1751,9 +1986,7 @@ public:
 
   Conjunction &operator= (const Conjunction &c) = delete;
 
-  ~Conjunction() override {
-    // We don't release conjuncts' memory here. Instead, we use a memory pool.
-  }
+  ~Conjunction() override { /* don't release children's memory here */ }
 
   std::string toStr() const override {
     std::string content;
@@ -1778,10 +2011,13 @@ public:
     return ret;
   }
 
-  ConstraintCode *printConstraintCode(std::vector<const BackMap*> &backMaps) const override {
-    auto ccc = new ConjunctionConstraintCode();
+  ConstraintCode *printConstraintCode(
+    std::vector<const BackMap*> &backMaps,
+    Pool<ConstraintCode> &cpool
+  ) const override {
+    auto ccc = cpool.poolNew<ConjunctionConstraintCode>();
     for (auto f : conjuncts) {
-      ccc->conjuncts.push_back(f->printConstraintCode(backMaps));
+      ccc->conjuncts.push_back(f->printConstraintCode(backMaps, cpool));
     }
     return ccc;
   }
@@ -1801,9 +2037,7 @@ public:
 
   Disjunction &operator= (const Disjunction &d) = delete;
 
-  ~Disjunction() override {
-    // We don't release disjuncts' memory here. Instead, we use a memory pool.
-  }
+  ~Disjunction() override { /* don't release children's memory here */ }
 
   std::string toStr() const override {
     std::string content;
@@ -1834,13 +2068,16 @@ public:
     return ret;
   }
 
-  ConstraintCode *printConstraintCode(std::vector<const BackMap*> &backMaps) const override {
-    auto dcc = new DisjunctionConstraintCode();
+  ConstraintCode *printConstraintCode(
+    std::vector<const BackMap*> &backMaps,
+    Pool<ConstraintCode> &cpool
+  ) const override {
+    auto dcc = cpool.poolNew<DisjunctionConstraintCode>();
     for (const std::pair<Formula*, std::optional<BackMap>> &p : disjuncts) {
       if (p.second.has_value()) {
         backMaps.push_back(&(p.second.value()));
       }
-      dcc->disjuncts.push_back((p.first)->printConstraintCode(backMaps));
+      dcc->disjuncts.push_back((p.first)->printConstraintCode(backMaps, cpool));
       if (p.second.has_value()) {
         backMaps.pop_back();
       }
@@ -1854,6 +2091,10 @@ public:
 
   std::vector<std::pair<Formula*, std::optional<BackMap>>> disjuncts;
 };
+
+/******************************************************
+ * named requirement inference
+ ******************************************************/
 
 namespace namedrequirements {
 
@@ -2027,11 +2268,11 @@ namespace namedrequirements {
 
 }
 
-// Later may add support of two or more named requirements.
 std::vector<std::string> infer(
   const Formula *formula,
   const std::unordered_set<Instantiation> &instantiation_set) {
   std::vector<std::string> requirements;
+  // As an extension we may add support of two or more named requirements.
   for (const auto &[name, predicates] : namedrequirements::requirements) {
     const auto &[constraint_predicate, instantiation_predicate] = predicates;
     bool ok1 = formula->evaluate(constraint_predicate);
@@ -2049,30 +2290,9 @@ std::vector<std::string> infer(
   return requirements;
 }
 
-class Pool {
-public:
-  Pool() = default;
-
-  Pool(const Pool &p) = delete;
-
-  Pool &operator= (const Pool &p) = delete;
-
-  ~Pool() {
-    for (auto ptr : pointers) {
-      delete ptr;
-    }
-  }
-
-  template <typename T, typename... Args>
-  T *poolNew(Args&&... args) {
-    auto ptr = new T(std::forward<Args>(args)...);
-    pointers.push_back(ptr);
-    return ptr;
-  }
-
-private:
-  std::vector<Formula*> pointers;
-};
+/******************************************************
+ * main entry
+ ******************************************************/
 
 class ConceptSynthConsumer : public clang::ASTConsumer {
 public:
@@ -2083,41 +2303,41 @@ public:
     // 0 for not visited, 1 for on stack, 2 for visited
     std::unordered_map<const TemplateTypeParmDecl*, int> status;
     std::unordered_map<const TemplateTypeParmDecl*, Formula*> results;
-    Pool pool;
+    Pool<Formula> fpool;
     std::function<Formula*(const TemplateTypeParmDecl*)> dfs =
       [&](const TemplateTypeParmDecl *ttpd) -> Formula* {
       if (status[ttpd] == 0) { // not visited
         status[ttpd] = 1;
-        auto conj = pool.poolNew<Conjunction>();
+        auto conj = fpool.poolNew<Conjunction>();
         for (const auto &con : visitor.constraintMap.at(ttpd)) {
           if (std::holds_alternative<UnaryConstraint>(con)) {
-            auto u = pool.poolNew<Atomic>(std::get<UnaryConstraint>(con));
+            auto u = fpool.poolNew<Atomic>(std::get<UnaryConstraint>(con));
             conj->addConjunct(u);
           } else if (std::holds_alternative<BinaryConstraint>(con)) {
-            auto b = pool.poolNew<Atomic>(std::get<BinaryConstraint>(con));
+            auto b = fpool.poolNew<Atomic>(std::get<BinaryConstraint>(con));
             conj->addConjunct(b);
           } else if (std::holds_alternative<MemberConstraint>(con)) {
-            auto m = pool.poolNew<Atomic>(std::get<MemberConstraint>(con));
+            auto m = fpool.poolNew<Atomic>(std::get<MemberConstraint>(con));
             conj->addConjunct(m);
           } else if (std::holds_alternative<FunctionConstraint>(con)) {
-            auto f = pool.poolNew<Atomic>(std::get<FunctionConstraint>(con));
+            auto f = fpool.poolNew<Atomic>(std::get<FunctionConstraint>(con));
             conj->addConjunct(f);
           } else if (std::holds_alternative<TypeTraitConstraint>(con)) {
-            auto t = pool.poolNew<Atomic>(std::get<TypeTraitConstraint>(con));
+            auto t = fpool.poolNew<Atomic>(std::get<TypeTraitConstraint>(con));
             conj->addConjunct(t);
           } else if (std::holds_alternative<CallConstraint>(con)) {
             auto c = std::get<CallConstraint>(con);
-            auto disj = pool.poolNew<Disjunction>();
+            auto disj = fpool.poolNew<Disjunction>();
             for (const auto &cc : c.dependencies) {
               if (std::holds_alternative<QualType>(cc)) {
-                auto a = pool.poolNew<Atomic>(ConcreteConstraint(c.selfType, std::get<QualType>(cc)));
+                auto a = fpool.poolNew<Atomic>(ConcreteConstraint(c.selfType, std::get<QualType>(cc)));
                 disj->addDisjunct(a);
               } else if (std::holds_alternative<TemplateDependency>(cc)) {
                 const auto &td = std::get<TemplateDependency>(cc);
                 if (auto f = dfs(td.ttpdecl)) {
                   disj->addDisjunct(f, td.backMap);
                 } else { // recursive dependency
-                  auto t = pool.poolNew<Literal>(true);
+                  auto t = fpool.poolNew<Literal>(true);
                   disj->addDisjunct(t);
                 }
               }
@@ -2148,12 +2368,13 @@ public:
       auto ftdecl = fromTemplateTypeParmDeclToFunctionTemplateDecl(ttpdecl, &context);
       if (ftdecl) {
         llvm::outs() << "[" << ftdecl->getNameAsString() << ":" << ftdecl->getAsFunction()->getNumParams() << ":" << ttpdecl->getNameAsString() << "]\n";
-        llvm::outs() << "\tRaw Constraint: " << f->toStr() << "\n";
+        // llvm::outs() << "\tRaw Constraint: " << f->toStr() << "\n";
+        Pool<ConstraintCode> cpool;
         std::vector<const BackMap*> backMaps;
-        auto cc = f->printConstraintCode(backMaps);
-        llvm::outs() << "\tPrinted code: " << cc->toStr() << "\n";
-        delete cc;
-        llvm::outs() << "\tInferred constraint:";
+        auto cc = f->printConstraintCode(backMaps, cpool);
+        auto scc = cc->getSimplified(cpool);
+        llvm::outs() << "Printed code:\n" << scc->toStr() << "\n";
+        llvm::outs() << "Inferred constraint:\n";
         const auto &inferred = infer(f, visitor.instantiationMap[ttpdecl]);
         for (const auto &con : inferred) {
           llvm::outs() << " " << con;
