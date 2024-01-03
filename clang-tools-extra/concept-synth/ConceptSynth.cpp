@@ -99,9 +99,13 @@ std::string getFullSourceLocationAsString(std::variant<const Decl*, const Stmt*>
   FullSourceLoc fl = ctx->getFullLoc(sl);
   if (fl.isValid()) {
     std::ostringstream oss;
-    oss << fl.getFileEntry()->getName().str() << ":"
-        << fl.getSpellingLineNumber() << ":"
-        << fl.getSpellingColumnNumber();
+    std::string fpath;
+    if (auto f = fl.getFileEntry()) {
+      fpath = f->getName().str();
+    }
+    unsigned line = fl.getSpellingLineNumber();
+    unsigned column = fl.getSpellingColumnNumber();
+    oss << fpath << ":" << line << ":" << column;
     return oss.str();
   } else {
     return "";
