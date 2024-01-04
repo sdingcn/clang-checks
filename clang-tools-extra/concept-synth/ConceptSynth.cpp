@@ -2352,7 +2352,74 @@ namespace namedrequirements {
         }),
         [](const Instantiation &i){ return true; }
       }
-    }
+    },
+    {
+      "Float",
+      {
+        ConstraintPredicate({
+          UnaryConstraint("++"),
+          UnaryConstraint("--"),
+          BinaryConstraint("=="),
+          BinaryConstraint("!="),
+          BinaryConstraint("<"),
+          BinaryConstraint(">"),
+          BinaryConstraint("<="),
+          BinaryConstraint(">="),
+          UnaryConstraint("+", std::nullopt, 1),
+          UnaryConstraint("-", std::nullopt, 1),
+          BinaryConstraint("+"),
+          BinaryConstraint("-"),
+          BinaryConstraint("*"),
+          BinaryConstraint("/"),
+          BinaryConstraint("="),
+          BinaryConstraint("+="),
+          BinaryConstraint("-="),
+          BinaryConstraint("*="),
+          BinaryConstraint("/=")
+        }),
+        [](const Instantiation &i){ return true; }
+      }
+    },
+    {
+      "Integral",
+      {
+        ConstraintPredicate({
+          UnaryConstraint("++"),
+          UnaryConstraint("--"),
+          BinaryConstraint("=="),
+          BinaryConstraint("!="),
+          BinaryConstraint("<"),
+          BinaryConstraint(">"),
+          BinaryConstraint("<="),
+          BinaryConstraint(">="),
+          UnaryConstraint("+", std::nullopt, 1),
+          UnaryConstraint("-", std::nullopt, 1),
+          BinaryConstraint("+"),
+          BinaryConstraint("-"),
+          BinaryConstraint("*"),
+          BinaryConstraint("/"),
+          BinaryConstraint("%"),
+          UnaryConstraint("~", std::nullopt, 1),
+          BinaryConstraint("&"),
+          BinaryConstraint("|"),
+          BinaryConstraint("^"),
+          BinaryConstraint("<<"),
+          BinaryConstraint(">>"),
+          BinaryConstraint("="),
+          BinaryConstraint("+="),
+          BinaryConstraint("-="),
+          BinaryConstraint("*="),
+          BinaryConstraint("/="),
+          BinaryConstraint("%="),
+          BinaryConstraint("&="),
+          BinaryConstraint("|="),
+          BinaryConstraint("^="),
+          BinaryConstraint("<<="),
+          BinaryConstraint(">>="),
+        }),
+        [](const Instantiation &i){ return true; }
+      }
+    },
   };
 
 }
