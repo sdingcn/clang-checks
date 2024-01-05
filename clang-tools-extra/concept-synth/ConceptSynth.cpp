@@ -772,32 +772,6 @@ using Constraint = std::variant<
 >;
 
 /******************************************************
- * instantiation class
- ******************************************************/
-
-struct Instantiation {
-  Instantiation(QualType t)
-    : type(t) {}
-
-  bool operator== (const Instantiation &other) const {
-    return type == other.type;
-  }
-
-  std::string toStr() const {
-    return CLASS_STRING(type.getAsString());
-  }
-
-  QualType type;
-};
-
-template <>
-struct std::hash<Instantiation> {
-  std::size_t operator() (const Instantiation &i) const {
-    return std::hash<std::string>()(i.toStr());
-  }
-};
-
-/******************************************************
  * simple inference
  ******************************************************/
 
@@ -861,14 +835,6 @@ public:
   explicit TraverseFunctionTemplateVisitor(ASTContext *c, FunctionTemplateDecl *f)
     : context(c), functionTemplateDecl(f) {}
 
-  // Get instantiations
-  bool VisitFunctionDecl(FunctionDecl *fdecl) {
-    if (fdecl->isTemplateInstantiation()) {
-      templateArgumentLists.push_back(fdecl->getTemplateSpecializationArgs());
-    }
-    return true;
-  }
-
   // Get template body usages
   bool VisitDeclRefExpr(DeclRefExpr *var) {
     // ignore compound template types like T*, std::vector<T>, etc.
@@ -909,11 +875,6 @@ public:
     return true;
   }
 
-  bool shouldVisitTemplateInstantiations() const {
-    return true;
-  }
-
-  std::vector<const TemplateArgumentList *> templateArgumentLists;
   std::vector<VariableUseStmt> variableUseStmts;
   std::vector<TypeTraitConstraint> typeTraitConstraints;
 
@@ -1160,24 +1121,11 @@ public:
         }
       }
     }
-
-    // handle instantiations
-    int len = tplist->size();
-    for (int i = 0; i < len; i++) {
-      auto decl = tplist->getParam(i);
-      if (auto ttpdecl = dyn_cast<TemplateTypeParmDecl>(decl)) {
-        for (auto argList : visitor.templateArgumentLists) {
-          Instantiation insta((*argList)[i].getAsType());
-          instantiationMap[ttpdecl].insert(insta);
-        }
-      }
-    }
   
     return true;
   }
 
   std::unordered_map<const TemplateTypeParmDecl*, std::unordered_set<Constraint>> constraintMap;
-  std::unordered_map<const TemplateTypeParmDecl*, std::unordered_set<Instantiation>> instantiationMap;
 
 private:
   ASTContext *context;
@@ -2232,214 +2180,172 @@ namespace namedrequirements {
     std::vector<MemberConstraint> memberPatterns;
   };
 
-  // named requirements ->
-  // (has_constraint, has_instantiation)
+  // named requirements -> has_constraint
   std::vector<std::pair<
     std::string,
-    std::pair<std::function<bool(const AtomicConstraint&)>, std::function<bool(const Instantiation&)>>
+    std::function<bool(const AtomicConstraint&)>
   >> requirements = {
     {
       "Iterator",
-      {
-        ConstraintPredicate({
-          UnaryConstraint("*", std::nullopt, 1),
-          UnaryConstraint("++", std::nullopt, 1),
-          BinaryConstraint("=")
-        }),
-        [](const Instantiation &i){ return true; }
-      }
+      ConstraintPredicate({
+        UnaryConstraint("*", std::nullopt, 1),
+        UnaryConstraint("++", std::nullopt, 1),
+        BinaryConstraint("=")
+      })
     },
     {
       "InputIterator",
-      {
-        ConstraintPredicate({
-          UnaryConstraint("*", std::nullopt, 1),
-          UnaryConstraint("++", std::nullopt, 1),
-          BinaryConstraint("="),
-          BinaryConstraint("=="),
-          BinaryConstraint("!="),
-          UnaryConstraint("++", std::nullopt, 0)
-        }),
-        [](const Instantiation &i){ return true; }
-      }
+      ConstraintPredicate({
+        UnaryConstraint("*", std::nullopt, 1),
+        UnaryConstraint("++", std::nullopt, 1),
+        BinaryConstraint("="),
+        BinaryConstraint("=="),
+        BinaryConstraint("!="),
+        UnaryConstraint("++", std::nullopt, 0)
+      })
     },
     {
       "OutputIterator",
-      {
-        ConstraintPredicate({
-          UnaryConstraint("*", std::nullopt, 1),
-          UnaryConstraint("++", std::nullopt, 1),
-          BinaryConstraint("="),
-          UnaryConstraint("++", std::nullopt, 0)
-        }),
-        [](const Instantiation &i){ return true; }
-      }
+      ConstraintPredicate({
+        UnaryConstraint("*", std::nullopt, 1),
+        UnaryConstraint("++", std::nullopt, 1),
+        BinaryConstraint("="),
+        UnaryConstraint("++", std::nullopt, 0)
+      })
     },
     {
       "ForwardIterator",
-      {
-        ConstraintPredicate({
-          UnaryConstraint("*", std::nullopt, 1),
-          UnaryConstraint("++", std::nullopt, 1),
-          BinaryConstraint("="),
-          BinaryConstraint("=="),
-          BinaryConstraint("!="),
-          UnaryConstraint("++", std::nullopt, 0)
-        }),
-        [](const Instantiation &i){ return true; }
-      }
+      ConstraintPredicate({
+        UnaryConstraint("*", std::nullopt, 1),
+        UnaryConstraint("++", std::nullopt, 1),
+        BinaryConstraint("="),
+        BinaryConstraint("=="),
+        BinaryConstraint("!="),
+        UnaryConstraint("++", std::nullopt, 0)
+      })
     },
     {
       "BidirectionalIterator",
-      {
-        ConstraintPredicate({
-          UnaryConstraint("*", std::nullopt, 1),
-          UnaryConstraint("++", std::nullopt, 1),
-          BinaryConstraint("="),
-          BinaryConstraint("=="),
-          BinaryConstraint("!="),
-          UnaryConstraint("++", std::nullopt, 0),
-          UnaryConstraint("--")
-        }),
-        [](const Instantiation &i){ return true; }
-      }
+      ConstraintPredicate({
+        UnaryConstraint("*", std::nullopt, 1),
+        UnaryConstraint("++", std::nullopt, 1),
+        BinaryConstraint("="),
+        BinaryConstraint("=="),
+        BinaryConstraint("!="),
+        UnaryConstraint("++", std::nullopt, 0),
+        UnaryConstraint("--")
+      })
     },
     {
       "RandomAccessIterator",
-      {
-        ConstraintPredicate({
-          UnaryConstraint("*", std::nullopt, 1),
-          UnaryConstraint("++", std::nullopt, 1),
-          BinaryConstraint("="),
-          BinaryConstraint("=="),
-          BinaryConstraint("!="),
-          UnaryConstraint("++", std::nullopt, 0),
-          UnaryConstraint("--"),
-          BinaryConstraint("+"),
-          BinaryConstraint("-"),
-          BinaryConstraint("<"),
-          BinaryConstraint(">"),
-          BinaryConstraint("<="),
-          BinaryConstraint(">="),
-          BinaryConstraint("+="),
-          BinaryConstraint("-=")
-        }),
-        [](const Instantiation &i){ return true; }
-      }
+      ConstraintPredicate({
+        UnaryConstraint("*", std::nullopt, 1),
+        UnaryConstraint("++", std::nullopt, 1),
+        BinaryConstraint("="),
+        BinaryConstraint("=="),
+        BinaryConstraint("!="),
+        UnaryConstraint("++", std::nullopt, 0),
+        UnaryConstraint("--"),
+        BinaryConstraint("+"),
+        BinaryConstraint("-"),
+        BinaryConstraint("<"),
+        BinaryConstraint(">"),
+        BinaryConstraint("<="),
+        BinaryConstraint(">="),
+        BinaryConstraint("+="),
+        BinaryConstraint("-=")
+      })
     },
     {
       "Predicate",
-      {
-        ConstraintPredicate({
-          FunctionConstraint(
-            std::nullopt,
-            std::vector<std::optional<Argum>>{ std::nullopt },
-            "bool"
-          )
-        }),
-        [](const Instantiation &i){ return true; }
-      }
+      ConstraintPredicate({
+        FunctionConstraint(
+          std::nullopt,
+          std::vector<std::optional<Argum>>{ std::nullopt },
+          "bool"
+        )
+      })
     },
     {
       "BinaryPredicate",
-      {
-        ConstraintPredicate({
-          FunctionConstraint(
-            std::nullopt,
-            std::vector<std::optional<Argum>>{ std::nullopt, std::nullopt },
-            "bool"
-          )
-        }),
-        [](const Instantiation &i){ return true; }
-      }
+      ConstraintPredicate({
+        FunctionConstraint(
+          std::nullopt,
+          std::vector<std::optional<Argum>>{ std::nullopt, std::nullopt },
+          "bool"
+        )
+      })
     },
     {
       "Float",
-      {
-        ConstraintPredicate({
-          UnaryConstraint("++"),
-          UnaryConstraint("--"),
-          BinaryConstraint("=="),
-          BinaryConstraint("!="),
-          BinaryConstraint("<"),
-          BinaryConstraint(">"),
-          BinaryConstraint("<="),
-          BinaryConstraint(">="),
-          UnaryConstraint("+", std::nullopt, 1),
-          UnaryConstraint("-", std::nullopt, 1),
-          BinaryConstraint("+"),
-          BinaryConstraint("-"),
-          BinaryConstraint("*"),
-          BinaryConstraint("/"),
-          BinaryConstraint("="),
-          BinaryConstraint("+="),
-          BinaryConstraint("-="),
-          BinaryConstraint("*="),
-          BinaryConstraint("/=")
-        }),
-        [](const Instantiation &i){ return true; }
-      }
+      ConstraintPredicate({
+        UnaryConstraint("++"),
+        UnaryConstraint("--"),
+        BinaryConstraint("=="),
+        BinaryConstraint("!="),
+        BinaryConstraint("<"),
+        BinaryConstraint(">"),
+        BinaryConstraint("<="),
+        BinaryConstraint(">="),
+        UnaryConstraint("+", std::nullopt, 1),
+        UnaryConstraint("-", std::nullopt, 1),
+        BinaryConstraint("+"),
+        BinaryConstraint("-"),
+        BinaryConstraint("*"),
+        BinaryConstraint("/"),
+        BinaryConstraint("="),
+        BinaryConstraint("+="),
+        BinaryConstraint("-="),
+        BinaryConstraint("*="),
+        BinaryConstraint("/=")
+      })
     },
     {
       "Integral",
-      {
-        ConstraintPredicate({
-          UnaryConstraint("++"),
-          UnaryConstraint("--"),
-          BinaryConstraint("=="),
-          BinaryConstraint("!="),
-          BinaryConstraint("<"),
-          BinaryConstraint(">"),
-          BinaryConstraint("<="),
-          BinaryConstraint(">="),
-          UnaryConstraint("+", std::nullopt, 1),
-          UnaryConstraint("-", std::nullopt, 1),
-          BinaryConstraint("+"),
-          BinaryConstraint("-"),
-          BinaryConstraint("*"),
-          BinaryConstraint("/"),
-          BinaryConstraint("%"),
-          UnaryConstraint("~", std::nullopt, 1),
-          BinaryConstraint("&"),
-          BinaryConstraint("|"),
-          BinaryConstraint("^"),
-          BinaryConstraint("<<"),
-          BinaryConstraint(">>"),
-          BinaryConstraint("="),
-          BinaryConstraint("+="),
-          BinaryConstraint("-="),
-          BinaryConstraint("*="),
-          BinaryConstraint("/="),
-          BinaryConstraint("%="),
-          BinaryConstraint("&="),
-          BinaryConstraint("|="),
-          BinaryConstraint("^="),
-          BinaryConstraint("<<="),
-          BinaryConstraint(">>="),
-        }),
-        [](const Instantiation &i){ return true; }
-      }
-    },
+      ConstraintPredicate({
+        UnaryConstraint("++"),
+        UnaryConstraint("--"),
+        BinaryConstraint("=="),
+        BinaryConstraint("!="),
+        BinaryConstraint("<"),
+        BinaryConstraint(">"),
+        BinaryConstraint("<="),
+        BinaryConstraint(">="),
+        UnaryConstraint("+", std::nullopt, 1),
+        UnaryConstraint("-", std::nullopt, 1),
+        BinaryConstraint("+"),
+        BinaryConstraint("-"),
+        BinaryConstraint("*"),
+        BinaryConstraint("/"),
+        BinaryConstraint("%"),
+        UnaryConstraint("~", std::nullopt, 1),
+        BinaryConstraint("&"),
+        BinaryConstraint("|"),
+        BinaryConstraint("^"),
+        BinaryConstraint("<<"),
+        BinaryConstraint(">>"),
+        BinaryConstraint("="),
+        BinaryConstraint("+="),
+        BinaryConstraint("-="),
+        BinaryConstraint("*="),
+        BinaryConstraint("/="),
+        BinaryConstraint("%="),
+        BinaryConstraint("&="),
+        BinaryConstraint("|="),
+        BinaryConstraint("^="),
+        BinaryConstraint("<<="),
+        BinaryConstraint(">>="),
+      })
+    }
   };
 
 }
 
-std::vector<std::string> infer(
-  const Formula *formula,
-  const std::unordered_set<Instantiation> &instantiation_set) {
+std::vector<std::string> infer(const Formula *formula) {
   std::vector<std::string> requirements;
   // As an extension we may add support of two or more named requirements.
-  for (const auto &[name, predicates] : namedrequirements::requirements) {
-    const auto &[constraint_predicate, instantiation_predicate] = predicates;
-    bool ok1 = formula->evaluate(constraint_predicate);
-    bool ok2 = true;
-    for (const auto &i : instantiation_set) {
-      if (!instantiation_predicate(i)) {
-        ok2 = false;
-        break;
-      }
-    }
-    if (ok1 && ok2) {
+  for (const auto &[name, predicate] : namedrequirements::requirements) {
+    if (formula->evaluate(predicate)) {
       requirements.push_back(name);
     }
   }
@@ -2532,7 +2438,7 @@ public:
         llvm::outs() << "Printed code (original):\n" << cc->toStr() << "\n";
         llvm::outs() << "Printed code (optimized):\n" << scc->toStr() << "\n";
         llvm::outs() << "Inferred constraint:\n";
-        const auto &inferred = infer(f, visitor.instantiationMap[ttpdecl]);
+        const auto &inferred = infer(f);
         for (const auto &con : inferred) {
           llvm::outs() << con << " ";
         }
