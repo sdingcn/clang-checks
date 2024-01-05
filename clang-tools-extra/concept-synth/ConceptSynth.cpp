@@ -12,6 +12,7 @@
 #include "llvm/Support/CommandLine.h"
 
 #include <cstdint>
+#include <cassert>
 #include <algorithm>
 #include <vector>
 #include <unordered_set>
@@ -176,6 +177,17 @@ bool isValidNumberOfArgs(const FunctionTemplateDecl *ftdecl, int nArgs) {
   int l = getNumberOfRequiredArgs(ftdecl->getAsFunction());
   int r = ftdecl->getAsFunction()->getNumParams();
   return nArgs >= l && nArgs <= r;
+}
+
+int getArgPosition(const CallExpr *callExpr, const Stmt *stmt) {
+  int pos = 0;
+  for (auto nodeptr = callExpr->arg_begin(); nodeptr != callExpr->arg_end(); nodeptr++) {
+    if ((*nodeptr) == stmt) {
+      return pos;
+    }
+    pos++;
+  }
+  return -1;
 }
 
 const Stmt *getFirstStmtParent(const Stmt *s, ASTContext *ctx) {
@@ -439,6 +451,8 @@ struct DependentExpression {
   int pos;
 };
 
+// Argum is a type or dependent expression that some constraints need
+// e.g. requires (T x, ...) { x + ?; } needs Argum at ?
 using Argum = std::variant<QualType, DependentExpression>;
 
 std::string argumToString(const Argum &a) {
@@ -689,10 +703,12 @@ struct TemplateDependency {
     return CLASS_STRING(content);
   }
 
+  // callee's ttpdecl that current function's ttpdecl depends on
   const TemplateTypeParmDecl *ttpdecl;
   BackMap backMap;
 };
 
+// current function's ttpdecl can depend on either concrete callee types or callee ttpdecls
 using Dependency = std::variant<QualType, TemplateDependency>;
 
 std::string dependencyToString(const Dependency &d) {
@@ -762,13 +778,22 @@ struct std::hash<ConcreteConstraint> {
 };
 
 using Constraint = std::variant<
+  ConcreteConstraint,
   TypeTraitConstraint,
   UnaryConstraint,
   BinaryConstraint,
   FunctionConstraint,
   MemberConstraint,
-  CallConstraint,
-  ConcreteConstraint
+  CallConstraint
+>;
+
+using AtomicConstraint = std::variant<
+  ConcreteConstraint,
+  TypeTraitConstraint,
+  UnaryConstraint,
+  BinaryConstraint,
+  FunctionConstraint,
+  MemberConstraint
 >;
 
 /******************************************************
@@ -861,7 +886,7 @@ public:
     return true;
   }
 
-  // Get template body trait constraints
+  // Get template body trait constraints in static_assert
   bool visitStaticAssertDecl(StaticAssertDecl *sad) {
     auto expr = sad->getAssertExpr();
     auto tc = tryTraitConstraint(
@@ -900,11 +925,11 @@ public:
     ) {
       return true;
     }
-    // exclude class / instance members
+    // ignore class / instance members
     if (ftdecl->isCXXClassMember() || ftdecl->isCXXInstanceMember()) {
       return true;
     }
-    // exclude variadic templates
+    // ignore variadic templates
     if (isVariadicFunctionTemplate(ftdecl)) {
       return true;
     }
@@ -918,7 +943,7 @@ public:
     // traverse
     TraverseFunctionTemplateVisitor visitor(context, ftdecl);
     visitor.TraverseDecl(ftdecl);
-    // get type trait constraints
+    // get type trait constraints from parameter-list or return type
     for (auto pit = ftdecl->getAsFunction()->param_begin();
          pit != ftdecl->getAsFunction()->param_end();
          pit++) {
@@ -936,6 +961,7 @@ public:
       }
     }
     // handle template-typed variable usages
+    // variable use loop begin
     for (auto varUseExpr : visitor.variableUseStmts) {
       if (auto unaryOp = dyn_cast<UnaryOperator>(varUseExpr.stmt)) {
         constraintMap[varUseExpr.ttpdecl].insert(
@@ -978,18 +1004,17 @@ public:
           );
         // var used as argument && callee is an identifier
         } else if (auto namedCallee = dyn_cast<UnresolvedLookupExpr>(callExpr->getCallee())) {
+          // number of args
+          int nArgs = callExpr->getNumArgs();
           // var used as the pos-th argument
-          int pos = 0;
-          for (auto nodeptr = callExpr->arg_begin(); nodeptr != callExpr->arg_end(); nodeptr++) {
-            if ((*nodeptr) == varUseExpr.var) {
-              break;
-            }
-            pos++;
+          int pos = getArgPosition(callExpr, varUseExpr.var);
+          if (pos == -1) {
+            continue;
           }
           // constraints imposed by overloading candidates
           std::vector<Dependency> dependencies;
           bool hasUnhandledCandidate = false;
-          int nArgs = callExpr->getNumArgs();
+          // candidate loop begin
           for (auto declit = namedCallee->decls_begin(); declit != namedCallee->decls_end(); declit++) {
             auto canddecl = *declit;
             // ignore class / instance members
@@ -1004,64 +1029,72 @@ public:
                 hasUnhandledCandidate = true;
                 break;
               }
-              if (isValidNumberOfArgs(callee_ftdecl, nArgs)) {
-                auto callee_parmtype = callee_ftdecl->getAsFunction()->getParamDecl(pos)->getType();
-                if (callee_parmtype->isDependentType()) {
-                  auto callee_tplist = callee_ftdecl->getTemplateParameters();
-                  if (auto callee_ttpdecl = fromQualTypeToTemplateTypeParmDecl(
-                    callee_parmtype,
-                    callee_tplist,
-                    context
-                  )) {
-                    TemplateDependency dependency;
-                    dependency.ttpdecl = callee_ttpdecl;
-                    // best effort: fill backMap
-                    for (int i = 0; i < nArgs; i++) {
-                      // left: callsite arg type
-                      std::optional<SupportedType> left = std::nullopt;
-                      // right: callee parm type's template type parm decl
-                      const TemplateTypeParmDecl *right = nullptr;
-                      if (i == pos) { // special case: for current position the left is just ttpdecl
-                        left = varUseExpr.ttpdecl;
-                      } else {
-                        const Expr *arg = callExpr->getArg(i);
-                        if (auto plain = trySupportedType(arg->getType(), tplist, context)) {
-                          left = plain;
-                        } else if (isMoveOrForward(arg)) {
-                          if (auto mf = trySupportedType(
-                            dyn_cast<CallExpr>(arg)->getArg(0)->getType(),
-                            tplist,
-                            context
-                          )) {
-                            left = mf;
-                          }
+              // number of args doesn't match, can safely ignore
+              if (!isValidNumberOfArgs(callee_ftdecl, nArgs)) {
+                continue;
+              }
+              // proceed to get a dependency
+              auto callee_parmtype = callee_ftdecl->getAsFunction()->getParamDecl(pos)->getType();
+              // ttpdecl dependency
+              if (callee_parmtype->isDependentType()) {
+                auto callee_tplist = callee_ftdecl->getTemplateParameters();
+                if (auto callee_ttpdecl = fromQualTypeToTemplateTypeParmDecl(
+                  callee_parmtype,
+                  callee_tplist,
+                  context
+                )) {
+                  TemplateDependency dependency;
+                  dependency.ttpdecl = callee_ttpdecl;
+                  // best effort: fill backMap
+                  for (int i = 0; i < nArgs; i++) {
+                    // left: callsite arg type
+                    std::optional<SupportedType> left = std::nullopt;
+                    // right: callee parm type's template type parm decl
+                    const TemplateTypeParmDecl *right = nullptr;
+                    if (i == pos) { // special case: for current position the left is just ttpdecl
+                      left = varUseExpr.ttpdecl;
+                    } else {
+                      const Expr *arg = callExpr->getArg(i);
+                      if (auto plain = trySupportedType(arg->getType(), tplist, context)) {
+                        left = plain;
+                      } else if (isMoveOrForward(arg)) {
+                        if (auto mf = trySupportedType(
+                          dyn_cast<CallExpr>(arg)->getArg(0)->getType(),
+                          tplist,
+                          context
+                        )) {
+                          left = mf;
                         }
                       }
-                      right = fromQualTypeToTemplateTypeParmDecl(
-                        callee_ftdecl->getAsFunction()->getParamDecl(i)->getType(),
-                        callee_tplist,
-                        context
-                      );
-                      if (left.has_value() && right) {
-                        dependency.backMap[right] = left.value();
-                      }
                     }
-                    dependencies.push_back(dependency);
-                  } else {
-                    hasUnhandledCandidate = true;
-                    break;
+                    right = fromQualTypeToTemplateTypeParmDecl(
+                      callee_ftdecl->getAsFunction()->getParamDecl(i)->getType(),
+                      callee_tplist,
+                      context
+                    );
+                    if (left.has_value() && right) {
+                      dependency.backMap[right] = left.value();
+                    }
                   }
+                  dependencies.push_back(dependency);
+                // complicated dependency (e.g. callee is f(std::vector<T> x)), cannot handle
                 } else {
-                  dependencies.push_back(callee_parmtype);
+                  hasUnhandledCandidate = true;
+                  break;
                 }
-                // specializations (C++ only allows full specialization for function templates)
-                for (auto specit = callee_ftdecl->spec_begin(); specit != callee_ftdecl->spec_end(); specit++) {
-                  auto spec = *specit;
-                  if (!(spec->isTemplateInstantiation())) {
-                    dependencies.push_back(spec->getParamDecl(pos)->getType());
-                  }
+              // concrete dependency
+              } else {
+                dependencies.push_back(callee_parmtype);
+              }
+              // specializations (C++ only allows full specialization for function templates)
+              for (auto specit = callee_ftdecl->spec_begin(); specit != callee_ftdecl->spec_end(); specit++) {
+                auto spec = *specit;
+                if (!(spec->isTemplateInstantiation())) {
+                  auto type = spec->getParamDecl(pos)->getType();
+                  assert(!(type->isDependentType()));
+                  dependencies.push_back(type);
                 }
-              } // else: number of args doesn't match, can safely ignore
+              }
             // candidate is a function
             } else if (auto callee_fdecl = dyn_cast<FunctionDecl>(canddecl)) {
               // ignore variadic functions
@@ -1069,22 +1102,29 @@ public:
                 hasUnhandledCandidate = true;
                 break;
               }
-              if (isValidNumberOfArgs(callee_fdecl, nArgs)) {
-                dependencies.push_back(callee_fdecl->getParamDecl(pos)->getType());
-              } // else: number of args doesn't match, can safely ignore
+              // number of args doesn't match, can safely ignore
+              if (!isValidNumberOfArgs(callee_fdecl, nArgs)) {
+                continue;
+              } 
+              dependencies.push_back(callee_fdecl->getParamDecl(pos)->getType());
             // not sure what the candidate is
             } else {
               hasUnhandledCandidate = true;
               break;
             }
-          }
+          } // candidate loop end
           // only treat it as a constraint when every case is handled
           if (!hasUnhandledCandidate) {
-            constraintMap[varUseExpr.ttpdecl].insert(
-              CallConstraint(varUseExpr.ttpdecl, std::move(dependencies))
-            );
+            // only consider the case where at least one dependencies are known
+            if (dependencies.size() > 0) {
+              constraintMap[varUseExpr.ttpdecl].insert(
+                CallConstraint(varUseExpr.ttpdecl, std::move(dependencies))
+              );
+            }
           }
-        } // else: ignore this callsite
+        // var used as neither callee nor arg
+        } else {
+        }
       } else if (auto mexpr = dyn_cast<CXXDependentScopeMemberExpr>(varUseExpr.stmt)) {
         // ignore member accesses via ->
         if (mexpr->isArrow()) {
@@ -1119,8 +1159,10 @@ public:
             )
           );
         }
+      // unknown constraint type
+      } else {
       }
-    }
+    } // variable use loop end
   
     return true;
   }
@@ -1131,20 +1173,11 @@ private:
   ASTContext *context;
 };
 
-using AtomicConstraint = std::variant<
-  ConcreteConstraint,
-  TypeTraitConstraint,
-  UnaryConstraint,
-  BinaryConstraint,
-  FunctionConstraint,
-  MemberConstraint
->;
-
 /******************************************************
 * memory management
 *******************************************************/
 
-template <typename B>
+template <typename Base>
 class Pool {
 public:
   Pool() = default;
@@ -1159,21 +1192,22 @@ public:
     }
   }
 
-  template <typename D, typename... Args>
-  D *poolNew(Args&&... args) {
-    auto ptr = new D(std::forward<Args>(args)...);
+  template <typename Derived, typename... Args>
+  Derived *poolNew(Args&&... args) {
+    auto ptr = new Derived(std::forward<Args>(args)...);
     pointers.push_back(ptr);
     return ptr;
   }
 
 private:
-  std::vector<B*> pointers;
+  std::vector<Base*> pointers;
 };
 
 /******************************************************
  * code classes
  * each analyzed function template gets its own separated code tree
  ******************************************************/
+
 // code's structrue tag
 enum class STag {
   E, // error
@@ -1207,6 +1241,7 @@ struct ConstraintCode {
     return {};
   }
 
+  // get new simplified code tree (not a subtree or anything of the original code tree)
   virtual ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const {
     return nullptr;
   }
@@ -1839,6 +1874,9 @@ public:
     if (std::holds_alternative<ConcreteConstraint>(con)) {
       ConcreteConstraint c = std::get<ConcreteConstraint>(con);
       return CLASS_STRING(c.toStr());
+    } else if (std::holds_alternative<TypeTraitConstraint>(con)) {
+      TypeTraitConstraint t = std::get<TypeTraitConstraint>(con);
+      return CLASS_STRING(t.toStr());
     } else if (std::holds_alternative<UnaryConstraint>(con)) {
       UnaryConstraint u = std::get<UnaryConstraint>(con);
       return CLASS_STRING(u.toStr());
@@ -1848,12 +1886,10 @@ public:
     } else if (std::holds_alternative<FunctionConstraint>(con)) {
       FunctionConstraint f = std::get<FunctionConstraint>(con);
       return CLASS_STRING(f.toStr());
-    } else if (std::holds_alternative<MemberConstraint>(con)) {
+    } else {
+      assert(std::holds_alternative<MemberConstraint>(con));
       MemberConstraint m = std::get<MemberConstraint>(con);
       return CLASS_STRING(m.toStr());
-    } else {
-      TypeTraitConstraint t = std::get<TypeTraitConstraint>(con);
-      return CLASS_STRING(t.toStr());
     }
   }
 
@@ -1916,6 +1952,12 @@ public:
       ccc->selfType = resolveType(c.selfType);
       ccc->targetType = resolveType(c.constraintType);
       CHECK_RETURN(ccc);
+    } else if (std::holds_alternative<TypeTraitConstraint>(con)) {
+      TypeTraitConstraint t = std::get<TypeTraitConstraint>(con);
+      auto tcc = cpool.poolNew<TypeTraitConstraintCode>();
+      tcc->selfType = resolveType(t.ttpdecl);
+      tcc->possiblyNegatedPredicate = (t.expr.neg ? "!" : "") + t.expr.predicate;
+      CHECK_RETURN(tcc);
     } else if (std::holds_alternative<UnaryConstraint>(con)) {
       UnaryConstraint u = std::get<UnaryConstraint>(con);
       auto ucc = cpool.poolNew<UnaryConstraintCode>();
@@ -1968,7 +2010,8 @@ public:
         fcc->returnType = f.returnType.value();
       }
       CHECK_RETURN(fcc);
-    } else if (std::holds_alternative<MemberConstraint>(con)) {
+    } else {
+      assert(std::holds_alternative<MemberConstraint>(con));
       MemberConstraint m = std::get<MemberConstraint>(con);
       auto mcc = cpool.poolNew<MemberConstraintCode>();
       mcc->memberName = m.mb;
@@ -1997,15 +2040,6 @@ public:
         mcc->returnType = m.returnType.value();
       }
       CHECK_RETURN(mcc);
-    } else if (std::holds_alternative<TypeTraitConstraint>(con)) {
-      TypeTraitConstraint t = std::get<TypeTraitConstraint>(con);
-      auto tcc = cpool.poolNew<TypeTraitConstraintCode>();
-      tcc->selfType = resolveType(t.ttpdecl);
-      tcc->possiblyNegatedPredicate = (t.expr.neg ? "!" : "") + t.expr.predicate;
-      CHECK_RETURN(tcc);
-    } else {
-      auto dummy = cpool.poolNew<ConstraintCode>();
-      CHECK_RETURN(dummy);
     }
 
 #undef CHECK_RETURN
@@ -2368,7 +2402,7 @@ public:
     Pool<Formula> fpool;
     std::function<Formula*(const TemplateTypeParmDecl*)> dfs =
       [&](const TemplateTypeParmDecl *ttpd) -> Formula* {
-      if (status[ttpd] == 0) { // not visited
+      if (status[ttpd] == 0) { // not visited (default value)
         status[ttpd] = 1;
         auto conj = fpool.poolNew<Conjunction>();
         for (const auto &con : visitor.constraintMap.at(ttpd)) {
@@ -2396,7 +2430,7 @@ public:
                 disj->addDisjunct(a);
               } else if (std::holds_alternative<TemplateDependency>(cc)) {
                 const auto &td = std::get<TemplateDependency>(cc);
-                if (auto f = dfs(td.ttpdecl)) {
+                if (auto f = dfs(td.ttpdecl)) { // recursive call of dfs happens here
                   disj->addDisjunct(f, td.backMap);
                 } else { // recursive dependency
                   auto t = fpool.poolNew<Literal>(true);
