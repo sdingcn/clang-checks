@@ -10,6 +10,7 @@
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Format.h"
 
 #include <cstdint>
 #include <cassert>
@@ -49,6 +50,19 @@ static cl::extrahelp MoreHelp("\nMore help text...\n");
 /******************************************************
  * helper functions
  ******************************************************/
+
+bool startsWith(const std::string &s1, const std::string &s2) {
+  if (s1.size() < s2.size()) {
+    return false;
+  }
+  int n = s2.size();
+  for (int i = 0; i < n; i++) {
+    if (s1[i] != s2[i]) {
+      return false;
+    }
+  }
+  return true;
+}
 
 std::string interpolate(const std::vector<std::string> &strs) {
   std::string result;
@@ -2458,6 +2472,9 @@ public:
       }
     }
 
+    std::map<const TemplateTypeParmDecl*, bool> ttpdstat;
+    std::map<const FunctionTemplateDecl*, bool> ftdstat;
+
     for (const auto &kv : results) {
       auto ttpdecl = kv.first;
       auto f = kv.second;
@@ -2469,6 +2486,17 @@ public:
         std::vector<const BackMap*> backMaps;
         auto cc = f->printConstraintCode(backMaps, cpool);
         auto scc = cc->getSimplified(cpool);
+        if (scc->toStr() != "true") {
+          ttpdstat[ttpdecl] = true;
+          ftdstat[ftdecl] = true;
+        } else {
+          if (ttpdstat.count(ttpdecl) == 0) {
+            ttpdstat[ttpdecl] = false;
+          }
+          if (ftdstat.count(ftdecl) == 0) {
+            ftdstat[ftdecl] = false;
+          }
+        }
         llvm::outs() << "Printed code (original):\n" << cc->toStr() << "\n";
         llvm::outs() << "Printed code (optimized):\n" << scc->toStr() << "\n";
         llvm::outs() << "Inferred constraint:\n";
@@ -2479,6 +2507,50 @@ public:
         llvm::outs() << "\n\n";
       }
     }
+
+    llvm::outs() << "[[Summary]]\n";
+
+    llvm::outs() << "Template Type Parameters:\n";
+    int ttpdCtr = ttpdstat.size();
+    int ttpdNontrivialCtr = 0;
+    for (const auto &p : ttpdstat) {
+      if (p.second) {
+        ttpdNontrivialCtr++;
+      }
+    }
+    llvm::outs() << "Total = " << ttpdCtr << "\n";
+    llvm::outs() << "Nontrivial = " << ttpdNontrivialCtr << "\n";
+    llvm::outs() << "Percentage = "
+                 << format("%.3f", static_cast<double>(ttpdNontrivialCtr) / ttpdCtr * 100) << "\n";
+
+    llvm::outs() << "Function Templates:\n";
+    int ftdCtr = ftdstat.size();
+    int ftdNontrivialCtr = 0;
+    for (const auto &p : ftdstat) {
+      if (p.second) {
+        ftdNontrivialCtr++;
+      }
+    }
+    llvm::outs() << "Total = " << ftdCtr << "\n";
+    llvm::outs() << "Nontrivial = " << ftdNontrivialCtr << "\n";
+    llvm::outs() << "Percentage = "
+                 << format("%.3f", static_cast<double>(ftdNontrivialCtr) / ftdCtr * 100) << "\n";
+
+    llvm::outs() << "Public Function Templates:\n";
+    int pFtdCtr = 0;
+    int pFtdNontrivialCtr = 0;
+    for (const auto &p : ftdstat) {
+      if (!startsWith(p.first->getNameAsString(), "__")) {
+        pFtdCtr++;
+        if (p.second) {
+          pFtdNontrivialCtr++;
+        }
+      }
+    }
+    llvm::outs() << "Total = " << pFtdCtr << "\n";
+    llvm::outs() << "Nontrivial = " << pFtdNontrivialCtr << "\n";
+    llvm::outs() << "Percentage = "
+                 << format("%.3f", static_cast<double>(pFtdNontrivialCtr) / pFtdCtr * 100) << "\n";
   }
 
 private:
