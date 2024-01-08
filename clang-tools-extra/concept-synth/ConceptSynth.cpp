@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <cassert>
+#include <chrono>
 #include <algorithm>
 #include <vector>
 #include <unordered_set>
@@ -2576,5 +2577,11 @@ int main(int argc, const char **argv) {
   CommonOptionsParser &OptionsParser = ExpectedParser.get();
   ClangTool Tool(OptionsParser.getCompilations(),
                  OptionsParser.getSourcePathList());
-  return Tool.run(newFrontendActionFactory<ConceptSynthAction>().get());
+  auto startTime = std::chrono::steady_clock::now();
+  auto retval = Tool.run(newFrontendActionFactory<ConceptSynthAction>().get());
+  auto endTime = std::chrono::steady_clock::now();
+  std::chrono::duration<double> secDiff = endTime - startTime;
+  llvm::outs() << "*** Resource consumption: ***\n"
+               << "Time (seconds): " << format("%.3f", secDiff.count()) << "\n";
+  return retval;
 }
