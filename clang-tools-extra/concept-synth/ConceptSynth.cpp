@@ -9,6 +9,7 @@
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Frontend/CompilerInstance.h"
+#include "clang/Rewrite/Core/Rewriter.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Format.h"
 
@@ -2407,7 +2408,7 @@ std::vector<std::string> infer(const Formula *formula) {
 
 class ConceptSynthConsumer : public clang::ASTConsumer {
 public:
-  explicit ConceptSynthConsumer(ASTContext *context) : visitor(context) {}
+  explicit ConceptSynthConsumer(ASTContext *context, Rewriter &r) : visitor(context), rewriter(r) {}
 
   virtual void HandleTranslationUnit(clang::ASTContext &context) override {
     visitor.TraverseDecl(context.getTranslationUnitDecl());
@@ -2475,38 +2476,63 @@ public:
 
     std::map<const TemplateTypeParmDecl*, bool> ttpdstat;
     std::map<const FunctionTemplateDecl*, bool> ftdstat;
+    std::map<const FunctionTemplateDecl*, std::string> insertions;
 
     for (const auto &kv : results) {
       auto ttpdecl = kv.first;
       auto f = kv.second;
       auto ftdecl = fromTemplateTypeParmDeclToFunctionTemplateDecl(ttpdecl, &context);
       if (ftdecl) {
-        llvm::outs() << "[" << ftdecl->getNameAsString() << ":" << ftdecl->getAsFunction()->getNumParams() << ":" << ttpdecl->getNameAsString() << "]\n";
-        llvm::outs() << "SourceLocation:\n" << getFullSourceLocationAsString(ftdecl, &context) << "\n";
+        // constraint strings
         Pool<ConstraintCode> cpool;
         std::vector<const BackMap*> backMaps;
         auto cc = f->printConstraintCode(backMaps, cpool);
+        auto ccstr = cc->toStr();
         auto scc = cc->getSimplified(cpool);
-        if (scc->toStr() != "true") {
-          ttpdstat[ttpdecl] = true;
-          ftdstat[ftdecl] = true;
+        auto sccstr = scc->toStr();
+        // statistics
+        auto sccnontrivial = ((sccstr != "true") ? true : false);
+        ttpdstat[ttpdecl] = sccnontrivial;
+        if (ftdstat.count(ftdecl) == 0) {
+          ftdstat[ftdecl] = sccnontrivial;
         } else {
-          if (ttpdstat.count(ttpdecl) == 0) {
-            ttpdstat[ttpdecl] = false;
-          }
-          if (ftdstat.count(ftdecl) == 0) {
-            ftdstat[ftdecl] = false;
+          ftdstat[ftdecl] = ftdstat[ftdecl] || sccnontrivial;
+        }
+        // rewriting
+        if (sccnontrivial) {
+          if (insertions.count(ftdecl) == 0) {
+            insertions[ftdecl] = "\nrequires\n" + sccstr;
+          } else {
+            insertions[ftdecl] = insertions[ftdecl] + " &&\n" + sccstr;
           }
         }
-        llvm::outs() << "Printed code (original):\n" << cc->toStr() << "\n";
-        llvm::outs() << "Printed code (optimized):\n" << scc->toStr() << "\n";
-        llvm::outs() << "Inferred constraint:\n";
-        const auto &inferred = infer(f);
-        for (const auto &con : inferred) {
-          llvm::outs() << con << " ";
+        // printing
+        if (sccnontrivial) {
+          auto ftname = ftdecl->getNameAsString();
+          auto ttpname = ttpdecl->getNameAsString();
+          llvm::outs() << "[[" << ftname << ":" << ttpname << "]]\n"
+                       << "SourceLocation:\n"
+                       << getFullSourceLocationAsString(ftdecl, &context) << "\n"
+                       << "Printed constraint (original):\n"
+                       << ccstr << "\n"
+                       << "Printed constraint (optimized):\n"
+                       << sccstr << "\n"
+                       << "Inferred constraint:\n";
+          const auto &inferred = infer(f);
+          for (const auto &con : inferred) {
+            llvm::outs() << con << " ";
+          }
+          llvm::outs() << "\n\n";
         }
-        llvm::outs() << "\n\n";
       }
+    }
+
+    // do the rewriting
+    for (const auto &p : insertions) {
+      auto ftdecl = p.first;
+      auto rangleloc = ftdecl->getTemplateParameters()->getRAngleLoc();
+      auto code = p.second;
+      rewriter.InsertTextAfterToken(rangleloc, code);
     }
 
     llvm::outs() << "[[Summary]]\n";
@@ -2551,11 +2577,12 @@ public:
     llvm::outs() << "Total = " << pFtdCtr << "\n";
     llvm::outs() << "Nontrivial = " << pFtdNontrivialCtr << "\n";
     llvm::outs() << "Percentage = "
-                 << format("%.3f", static_cast<double>(pFtdNontrivialCtr) / pFtdCtr * 100) << "\n";
+                 << format("%.3f", static_cast<double>(pFtdNontrivialCtr) / pFtdCtr * 100) << "\n\n";
   }
 
 private:
   FindTargetVisitor visitor;
+  Rewriter &rewriter;
 };
 
 class ConceptSynthAction : public clang::ASTFrontendAction {
@@ -2563,8 +2590,18 @@ public:
   virtual std::unique_ptr<clang::ASTConsumer>
   CreateASTConsumer(clang::CompilerInstance &compiler,
                     llvm::StringRef inFile) override {
-    return std::make_unique<ConceptSynthConsumer>(&compiler.getASTContext());
+    rewriter.setSourceMgr(compiler.getSourceManager(), compiler.getLangOpts());
+    return std::make_unique<ConceptSynthConsumer>(&compiler.getASTContext(), rewriter);
   }
+
+  void EndSourceFileAction() override {
+    llvm::outs() << "[[Rewritten code]]\n";
+    rewriter.getEditBuffer(rewriter.getSourceMgr().getMainFileID()).write(llvm::outs());
+    llvm::outs() << "\n";
+  }
+
+private:
+  Rewriter rewriter;
 };
 
 int main(int argc, const char **argv) {
@@ -2581,7 +2618,7 @@ int main(int argc, const char **argv) {
   auto retval = Tool.run(newFrontendActionFactory<ConceptSynthAction>().get());
   auto endTime = std::chrono::steady_clock::now();
   std::chrono::duration<double> secDiff = endTime - startTime;
-  llvm::outs() << "*** Resource consumption: ***\n"
-               << "Time (seconds): " << format("%.3f", secDiff.count()) << "\n";
+  llvm::outs() << "[[Resource consumption]]\n"
+               << "Time (seconds): " << format("%.3f", secDiff.count()) << "\n\n";
   return retval;
 }
