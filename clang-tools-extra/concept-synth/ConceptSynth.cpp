@@ -1311,7 +1311,7 @@ struct ConcreteConstraintCode : public ConstraintCode {
   }
 
   std::string toStr() const override {
-    return stringFormat("std::convertible_to<#, #>", {selfType, targetType});
+    return stringFormat("(std::convertible_to<#, #>)", {selfType, targetType});
   }
 
   STag getSTag() const override {
@@ -1347,7 +1347,9 @@ struct TypeTraitConstraintCode : public ConstraintCode {
   }
 
   std::string toStr() const override {
-    return stringFormat("#<#>::value", {possiblyNegatedPredicate, selfType});
+    // The pattern "(...))" is correct,
+    // see the construction of possiblyNegatedPredicate in Atomic::getConstraintCode
+    return stringFormat("(#<#>::value))", {possiblyNegatedPredicate, selfType});
   }
 
   STag getSTag() const override {
@@ -1826,7 +1828,7 @@ public:
     return true;
   }
 
-  virtual ConstraintCode *printConstraintCode(
+  virtual ConstraintCode *getConstraintCode(
     std::vector<const BackMap*> &backMaps,
     Pool<ConstraintCode> &cpool
   ) const {
@@ -1864,7 +1866,7 @@ public:
     return value;
   }
 
-  ConstraintCode *printConstraintCode(
+  ConstraintCode *getConstraintCode(
     std::vector<const BackMap*> &backMaps,
     Pool<ConstraintCode> &cpool
   ) const override {
@@ -1917,7 +1919,7 @@ public:
     return has_constraint(con);
   }
 
-  ConstraintCode *printConstraintCode(
+  ConstraintCode *getConstraintCode(
     std::vector<const BackMap*> &backMaps,
     Pool<ConstraintCode> &cpool
   ) const override {
@@ -1972,7 +1974,7 @@ public:
       TypeTraitConstraint t = std::get<TypeTraitConstraint>(con);
       auto tcc = cpool.poolNew<TypeTraitConstraintCode>();
       tcc->selfType = resolveType(t.ttpdecl);
-      tcc->possiblyNegatedPredicate = (t.expr.neg ? "!" : "") + t.expr.predicate;
+      tcc->possiblyNegatedPredicate = (t.expr.neg ? "!(" : "(") + t.expr.predicate;
       CHECK_RETURN(tcc);
     } else if (std::holds_alternative<UnaryConstraint>(con)) {
       UnaryConstraint u = std::get<UnaryConstraint>(con);
@@ -2098,13 +2100,13 @@ public:
     return ret;
   }
 
-  ConstraintCode *printConstraintCode(
+  ConstraintCode *getConstraintCode(
     std::vector<const BackMap*> &backMaps,
     Pool<ConstraintCode> &cpool
   ) const override {
     auto ccc = cpool.poolNew<ConjunctionConstraintCode>();
     for (auto f : conjuncts) {
-      ccc->conjuncts.push_back(f->printConstraintCode(backMaps, cpool));
+      ccc->conjuncts.push_back(f->getConstraintCode(backMaps, cpool));
     }
     return ccc;
   }
@@ -2155,7 +2157,7 @@ public:
     return ret;
   }
 
-  ConstraintCode *printConstraintCode(
+  ConstraintCode *getConstraintCode(
     std::vector<const BackMap*> &backMaps,
     Pool<ConstraintCode> &cpool
   ) const override {
@@ -2164,7 +2166,7 @@ public:
       if (p.second.has_value()) {
         backMaps.push_back(&(p.second.value()));
       }
-      dcc->disjuncts.push_back((p.first)->printConstraintCode(backMaps, cpool));
+      dcc->disjuncts.push_back((p.first)->getConstraintCode(backMaps, cpool));
       if (p.second.has_value()) {
         backMaps.pop_back();
       }
@@ -2411,11 +2413,18 @@ public:
   explicit ConceptSynthConsumer(ASTContext *context, Rewriter &r) : visitor(context), rewriter(r) {}
 
   virtual void HandleTranslationUnit(clang::ASTContext &context) override {
+    
+    /* collect constraints */
+    
     visitor.TraverseDecl(context.getTranslationUnitDecl());
+
+    /* construct formula graph */
+
     // 0 for not visited, 1 for on stack, 2 for visited
     std::unordered_map<const TemplateTypeParmDecl*, int> status;
     std::unordered_map<const TemplateTypeParmDecl*, Formula*> results;
     Pool<Formula> fpool;
+
     std::function<Formula*(const TemplateTypeParmDecl*)> dfs =
       [&](const TemplateTypeParmDecl *ttpd) -> Formula* {
       if (status[ttpd] == 0) { // not visited (default value)
@@ -2474,6 +2483,8 @@ public:
       }
     }
 
+    /* print */
+
     std::map<const TemplateTypeParmDecl*, bool> ttpdstat;
     std::map<const FunctionTemplateDecl*, bool> ftdstat;
     std::map<const FunctionTemplateDecl*, std::string> insertions;
@@ -2483,14 +2494,14 @@ public:
       auto f = kv.second;
       auto ftdecl = fromTemplateTypeParmDeclToFunctionTemplateDecl(ttpdecl, &context);
       if (ftdecl) {
-        // constraint strings
+        // generate constraint strings
         Pool<ConstraintCode> cpool;
         std::vector<const BackMap*> backMaps;
-        auto cc = f->printConstraintCode(backMaps, cpool);
+        auto cc = f->getConstraintCode(backMaps, cpool);
         auto ccstr = cc->toStr();
         auto scc = cc->getSimplified(cpool);
         auto sccstr = scc->toStr();
-        // statistics
+        // collect statistics
         auto sccnontrivial = ((sccstr != "true") ? true : false);
         ttpdstat[ttpdecl] = sccnontrivial;
         if (ftdstat.count(ftdecl) == 0) {
@@ -2498,7 +2509,7 @@ public:
         } else {
           ftdstat[ftdecl] = ftdstat[ftdecl] || sccnontrivial;
         }
-        // rewriting
+        // prepare for rewriting
         if (sccnontrivial) {
           if (insertions.count(ftdecl) == 0) {
             insertions[ftdecl] = "\nrequires\n" + sccstr;
@@ -2506,7 +2517,7 @@ public:
             insertions[ftdecl] = insertions[ftdecl] + " &&\n" + sccstr;
           }
         }
-        // printing
+        // print
         if (sccnontrivial) {
           auto ftname = ftdecl->getNameAsString();
           auto ttpname = ttpdecl->getNameAsString();
@@ -2527,13 +2538,48 @@ public:
       }
     }
 
-    // do the rewriting
+    /* erroneous calls */
+
+    llvm::outs() << "[[Erroneous calls]]\n";
+    for (const auto &p : insertions) {
+      auto ftdecl = p.first;
+      auto name = ftdecl->getNameAsString();
+      if ((!startsWith(name, "__")) && (!startsWith(name, "operator"))) {
+        int base = (static_cast<int>(name[0]) + 16384) % 3;
+        int n = getNumberOfRequiredArgs(ftdecl->getAsFunction());
+        std::string call = name + "(";
+        for (int i = 0; i < n; i++) {
+          std::string arg;
+          if ((base + i) % 3 == 0) {
+            arg = "nullptr";
+          } else if ((base + i) % 3 == 1) {
+            arg = "S()";
+          } else {
+            arg = "\"\"";
+          }
+          if (call.back() == '(') {
+            call += arg;
+          } else {
+            call += ", ";
+            call += arg;
+          }
+        }
+        call += ");";
+        llvm::outs() << call << "\n";
+      }
+    }
+    llvm::outs() << "\n";
+
+    /* rewrite */
+
     for (const auto &p : insertions) {
       auto ftdecl = p.first;
       auto rangleloc = ftdecl->getTemplateParameters()->getRAngleLoc();
       auto code = p.second;
       rewriter.InsertTextAfterToken(rangleloc, code);
     }
+
+    /* summary */
 
     llvm::outs() << "[[Summary]]\n";
 
@@ -2549,7 +2595,7 @@ public:
     llvm::outs() << "Nontrivial = " << ttpdNontrivialCtr << "\n";
     llvm::outs() << "Percentage = "
                  << format("%.3f", static_cast<double>(ttpdNontrivialCtr) / ttpdCtr * 100) << "\n";
-
+    
     llvm::outs() << "Function Templates:\n";
     int ftdCtr = ftdstat.size();
     int ftdNontrivialCtr = 0;
@@ -2562,7 +2608,7 @@ public:
     llvm::outs() << "Nontrivial = " << ftdNontrivialCtr << "\n";
     llvm::outs() << "Percentage = "
                  << format("%.3f", static_cast<double>(ftdNontrivialCtr) / ftdCtr * 100) << "\n";
-
+    
     llvm::outs() << "Public Function Templates:\n";
     int pFtdCtr = 0;
     int pFtdNontrivialCtr = 0;
@@ -2578,6 +2624,7 @@ public:
     llvm::outs() << "Nontrivial = " << pFtdNontrivialCtr << "\n";
     llvm::outs() << "Percentage = "
                  << format("%.3f", static_cast<double>(pFtdNontrivialCtr) / pFtdCtr * 100) << "\n\n";
+
   }
 
 private:
