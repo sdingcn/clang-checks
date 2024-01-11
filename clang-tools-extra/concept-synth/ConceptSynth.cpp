@@ -959,6 +959,7 @@ public:
     // traverse
     TraverseFunctionTemplateVisitor visitor(context, ftdecl);
     visitor.TraverseDecl(ftdecl);
+#if 0
     // get type trait constraints from parameter-list or return type
     for (auto pit = ftdecl->getAsFunction()->param_begin();
          pit != ftdecl->getAsFunction()->param_end();
@@ -976,6 +977,7 @@ public:
         constraintMap[t.value().ttpdecl].insert(t.value());
       }
     }
+#endif
     // handle template-typed variable usages
     // variable use loop begin
     for (auto varUseExpr : visitor.variableUseStmts) {
@@ -988,6 +990,10 @@ public:
           )
         );
       } else if (auto binaryOp = dyn_cast<BinaryOperator>(varUseExpr.stmt)) {
+        // ignore operator=
+        if (binaryOp->getOpcodeStr(binaryOp->getOpcode()).str() == "=") {
+          continue;
+        }
         auto otherHand = 
           binaryOp->getLHS() == varUseExpr.var ?
           binaryOp->getRHS() :
@@ -2543,20 +2549,13 @@ public:
     llvm::outs() << "[[Erroneous calls]]\n";
     for (const auto &p : insertions) {
       auto ftdecl = p.first;
-      auto name = ftdecl->getNameAsString();
-      if ((!startsWith(name, "__")) && (!startsWith(name, "operator"))) {
-        int base = (static_cast<int>(name[0]) + 16384) % 3;
+      auto name = ftdecl->getQualifiedNameAsString();
+      auto corename = ftdecl->getNameAsString();
+      if ((!startsWith(corename, "__")) && (!startsWith(corename, "operator"))) {
         int n = getNumberOfRequiredArgs(ftdecl->getAsFunction());
         std::string call = name + "(";
         for (int i = 0; i < n; i++) {
-          std::string arg;
-          if ((base + i) % 3 == 0) {
-            arg = "nullptr";
-          } else if ((base + i) % 3 == 1) {
-            arg = "S()";
-          } else {
-            arg = "\"\"";
-          }
+          std::string arg = "S()";
           if (call.back() == '(') {
             call += arg;
           } else {
