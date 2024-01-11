@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <cassert>
+#include <cctype>
 #include <chrono>
 #include <algorithm>
 #include <vector>
@@ -934,6 +935,10 @@ public:
   explicit FindTargetVisitor(ASTContext *context) : context(context) {}
 
   bool VisitFunctionTemplateDecl(FunctionTemplateDecl *ftdecl) {
+    // ignore pure declarations
+    if (!ftdecl->isThisDeclarationADefinition()) {
+      return true;
+    }
     // ignore deduction guides
     if (
       ftdecl->getKind() == Decl::Kind::CXXDeductionGuide ||
@@ -1046,6 +1051,10 @@ public:
             }
             // candidate is a function template
             if (auto callee_ftdecl = dyn_cast<FunctionTemplateDecl>(canddecl)) {
+              // ignore pure declarations
+              if (!callee_ftdecl->isThisDeclarationADefinition()) {
+                continue;
+              }
               // ignore variadic templates
               if (isVariadicFunctionTemplate(callee_ftdecl)) {
                 hasUnhandledCandidate = true;
@@ -1119,6 +1128,10 @@ public:
               }
             // candidate is a function
             } else if (auto callee_fdecl = dyn_cast<FunctionDecl>(canddecl)) {
+              // ignore pure declarations
+              if (!callee_fdecl->isThisDeclarationADefinition()) {
+                continue;
+              }
               // ignore variadic functions
               if (callee_fdecl->isVariadic()) {
                 hasUnhandledCandidate = true;
@@ -1929,6 +1942,23 @@ public:
     std::vector<const BackMap*> &backMaps,
     Pool<ConstraintCode> &cpool
   ) const override {
+    // get rid of complicated types that we cannot print reliably
+    // and do some other transformations
+    auto typeFilter = [&](const std::string &type) -> std::string {
+      for (char c : type) {
+        if (c == '(' || c == ')' || c == '[' || c == ']') {
+          return "";
+        }
+        if (std::isspace(c)) {
+          return "";
+        }
+      }
+      if (type == "_Bool") {
+        return "bool";
+      } else {
+        return type;
+      }
+    };
     // if printing constraint for f() and f() calls g()
     // then f() might depend on g()'s constraints
     // but g()'s constraints could be parameterized by g()'s template type parameters
@@ -1938,7 +1968,7 @@ public:
       if (t.has_value()) {
         auto st = t.value();
         if (std::holds_alternative<QualType>(st)) {
-          return std::get<QualType>(st).getAsString();
+          return typeFilter(getCleanType(std::get<QualType>(st)).getAsString());
         } else {
           auto ttpdecl = std::get<const TemplateTypeParmDecl*>(st);
           for (auto backMapPtr = backMaps.rbegin(); backMapPtr != backMaps.rend(); backMapPtr++) {
@@ -1947,7 +1977,7 @@ public:
             } else {
               auto next = (**backMapPtr).at(ttpdecl);
               if (std::holds_alternative<QualType>(next)) {
-                return std::get<QualType>(next).getAsString();
+                return typeFilter(getCleanType(std::get<QualType>(next)).getAsString());
               } else {
                 ttpdecl = std::get<const TemplateTypeParmDecl*>(next);
               }
@@ -1998,7 +2028,7 @@ public:
       if (b.otherExpr.has_value()) {
         const Argum &e = b.otherExpr.value();
         if (std::holds_alternative<QualType>(e)) {
-          bcc->otherType = std::get<QualType>(e).getAsString();
+          bcc->otherType = typeFilter(getCleanType(std::get<QualType>(e)).getAsString());
           bcc->otherExpr = "x1";
         } else {
           const DependentExpression &de = std::get<DependentExpression>(e);
@@ -2017,7 +2047,7 @@ public:
         if (a.has_value()) {
           const Argum &e = a.value();
           if (std::holds_alternative<QualType>(e)) {
-            fcc->parameterTypes.push_back(std::get<QualType>(e).getAsString());
+            fcc->parameterTypes.push_back(typeFilter(getCleanType(std::get<QualType>(e)).getAsString()));
             fcc->args.push_back(varName);
           } else {
             const DependentExpression &de = std::get<DependentExpression>(e);
@@ -2047,7 +2077,7 @@ public:
         if (a.has_value()) {
           const Argum &e = a.value();
           if (std::holds_alternative<QualType>(e)) {
-            mcc->parameterTypes.push_back(std::get<QualType>(e).getAsString());
+            mcc->parameterTypes.push_back(typeFilter(getCleanType(std::get<QualType>(e)).getAsString()));
             mcc->args.push_back(varName);
           } else {
             const DependentExpression &de = std::get<DependentExpression>(e);
@@ -2527,7 +2557,7 @@ public:
         if (sccnontrivial) {
           auto ftname = ftdecl->getNameAsString();
           auto ttpname = ttpdecl->getNameAsString();
-          llvm::outs() << "[[" << ftname << ":" << ttpname << "]]\n"
+          llvm::outs() << "[-[" << ftname << ":" << ttpname << "]-]\n"
                        << "SourceLocation:\n"
                        << getFullSourceLocationAsString(ftdecl, &context) << "\n"
                        << "Printed constraint (original):\n"
@@ -2546,7 +2576,7 @@ public:
 
     /* erroneous calls */
 
-    llvm::outs() << "[[Erroneous calls]]\n";
+    llvm::outs() << "[-[Erroneous calls]-]\n";
     for (const auto &p : insertions) {
       auto ftdecl = p.first;
       auto name = ftdecl->getQualifiedNameAsString();
@@ -2555,7 +2585,7 @@ public:
         int n = getNumberOfRequiredArgs(ftdecl->getAsFunction());
         std::string call = name + "(";
         for (int i = 0; i < n; i++) {
-          std::string arg = "S()";
+          std::string arg = "s";
           if (call.back() == '(') {
             call += arg;
           } else {
@@ -2573,14 +2603,24 @@ public:
 
     for (const auto &p : insertions) {
       auto ftdecl = p.first;
-      auto rangleloc = ftdecl->getTemplateParameters()->getRAngleLoc();
       auto code = p.second;
-      rewriter.InsertTextAfterToken(rangleloc, code);
+      // add constraints to all declarations
+      // assume there is no declaration after p.first which is the definition
+      while (true) {
+        auto rangleloc = ftdecl->getTemplateParameters()->getRAngleLoc();
+        rewriter.InsertTextAfterToken(rangleloc, code);
+        auto prev = ftdecl->getPreviousDecl();
+        if (prev) {
+          ftdecl = prev;
+        } else {
+          break;
+        }
+      }
     }
 
     /* summary */
 
-    llvm::outs() << "[[Summary]]\n";
+    llvm::outs() << "[-[Summary]-]\n";
 
     llvm::outs() << "Template Type Parameters:\n";
     int ttpdCtr = ttpdstat.size();
@@ -2641,7 +2681,7 @@ public:
   }
 
   void EndSourceFileAction() override {
-    llvm::outs() << "[[Rewritten code]]\n";
+    llvm::outs() << "[-[Rewritten code]-]\n";
     rewriter.getEditBuffer(rewriter.getSourceMgr().getMainFileID()).write(llvm::outs());
     llvm::outs() << "\n";
   }
@@ -2664,7 +2704,7 @@ int main(int argc, const char **argv) {
   auto retval = Tool.run(newFrontendActionFactory<ConceptSynthAction>().get());
   auto endTime = std::chrono::steady_clock::now();
   std::chrono::duration<double> secDiff = endTime - startTime;
-  llvm::outs() << "[[Resource consumption]]\n"
+  llvm::outs() << "[-[Resource consumption]-]\n"
                << "Time (seconds): " << format("%.3f", secDiff.count()) << "\n\n";
   return retval;
 }

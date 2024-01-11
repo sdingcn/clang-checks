@@ -1,1 +1,0 @@
-../build/bin/concept-synth stdtest.cc -- $(cat stdpaths.txt)

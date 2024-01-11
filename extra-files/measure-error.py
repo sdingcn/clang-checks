@@ -1,13 +1,11 @@
-import json
-import os.path
 import sys
 import subprocess
 
 def read_code(s: str) -> ([str], str):
-    _, tail1 = s.split("[[Erroneous calls]]")
-    err_calls, tail2 = tail1.split("[[Summary]]")
-    _, tail3 = tail2.split("[[Rewritten code]]")
-    rewritten, _ = tail3.split("[[Resource consumption]]")
+    _, tail1 = s.split("[-[Erroneous calls]-]")
+    err_calls, tail2 = tail1.split("[-[Summary]-]")
+    _, tail3 = tail2.split("[-[Rewritten code]-]")
+    rewritten, _ = tail3.split("[-[Resource consumption]-]")
     ret1 = []
     for call in err_calls.splitlines():
         call = call.strip()
@@ -18,13 +16,9 @@ def read_code(s: str) -> ([str], str):
 def compose(main: str, call: str) -> str:
     lines = main.splitlines()
     lines.insert(-2, "struct S {};")
+    lines.insert(-1, "S s;")
     lines.insert(-1, call)
     return "\n".join(lines)
-
-def make_absolute(file, directory):
-    if os.path.isabs(file):
-        return file
-    return os.path.abspath(os.path.join(directory, file))
 
 def execute(cmd, i) -> str:
     return subprocess.run(
@@ -54,16 +48,28 @@ if __name__ == '__main__':
         origin = f1.read().strip()
     with open(sys.argv[2], "r") as f2:
         err_calls, rewritten = read_code(f2.read())
-    for call in err_calls:
+    err_calls = err_calls[:5]
+    n = len(err_calls)
+    or_len_tot, re_len_tot, cnt = 0, 0, 0
+    err_lst = []
+    for (i, call) in enumerate(err_calls):
         origin_err = execute(["clang++", "-x", "c++", "-w", "-std=c++20", "-"], compose(origin, call))
         rewritten_err = execute(["clang++", "-x", "c++", "-w", "-std=c++20", "-"], compose(rewritten, call))
+        err_lst.append((origin_err, rewritten_err))
         or_len = len(origin_err.splitlines())
         re_len = len(rewritten_err.splitlines())
         if not approx(or_len, re_len):
-          name = get_callee_name(call)
-          print(origin_err)
-          print("\n\n\n\n\n")
-          print(rewritten_err)
-          print("\n\n\n\n\n")
-          print(f"name = {name}, origin_err = {or_len}, rewritten_err = {re_len}")
-          print("\n\n\n\n\n")
+            name = get_callee_name(call)
+            print(f"{i + 1}/{n}: or_len = {or_len},\tre_len = {re_len},\tname = {name}")
+            or_len_tot += or_len
+            re_len_tot += re_len
+            cnt += 1
+    if cnt > 0:
+        print(f"or_len_avg = {round(or_len_tot / cnt, 3)},\tre_len_avg = {round(re_len_tot / cnt, 3)}")
+    with open("result", "w") as f3:
+        for or_err, re_err in err_lst:
+            f3.write("{{{{{{\n")
+            f3.write(or_err + "\n")
+            f3.write("\n\n\n------\n\n\n")
+            f3.write(re_err + "\n")
+            f3.write("}}}}}}\n")

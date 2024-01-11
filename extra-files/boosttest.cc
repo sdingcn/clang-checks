@@ -1,3 +1,4 @@
 #include <boost/geometry.hpp>
 
-int main() {}
+int main() {
+}

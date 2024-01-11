@@ -1,1 +1,0 @@
-../build/bin/concept-synth boosttest.cc -- $(cat stdpaths.txt) $(cat boostpath.txt)
