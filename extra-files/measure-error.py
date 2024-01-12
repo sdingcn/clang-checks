@@ -42,13 +42,15 @@ def get_callee_name(call: str) -> str:
     return call.split("(")[0]
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        sys.exit(f"Usage: python3 {sys.argv[0]} <origin> <output>")
+    if len(sys.argv) < 3:
+        sys.exit(f"Usage: python3 {sys.argv[0]} <origin> <output> [name-prefix]")
     with open(sys.argv[1], "r") as f1:
         origin = f1.read().strip()
     with open(sys.argv[2], "r") as f2:
         err_calls, rewritten = read_code(f2.read())
-    err_calls = err_calls[:5]
+    if len(sys.argv) == 4:
+        err_calls = [ec for ec in err_calls if ec.startswith(sys.argv[3])]
+    err_calls = err_calls[:100]
     n = len(err_calls)
     or_len_tot, re_len_tot, cnt = 0, 0, 0
     err_lst = []

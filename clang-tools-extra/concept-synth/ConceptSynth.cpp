@@ -935,6 +935,10 @@ public:
   explicit FindTargetVisitor(ASTContext *context) : context(context) {}
 
   bool VisitFunctionTemplateDecl(FunctionTemplateDecl *ftdecl) {
+    // ignore already constrainted function templates
+    if (ftdecl->hasAssociatedConstraints()) {
+      return true;
+    }
     // ignore pure declarations
     if (!ftdecl->isThisDeclarationADefinition()) {
       return true;
@@ -987,6 +991,10 @@ public:
     // variable use loop begin
     for (auto varUseExpr : visitor.variableUseStmts) {
       if (auto unaryOp = dyn_cast<UnaryOperator>(varUseExpr.stmt)) {
+        // ignore operator&
+        if (unaryOp->getOpcodeStr(unaryOp->getOpcode()).str() == "&") {
+          continue;
+        }
         constraintMap[varUseExpr.ttpdecl].insert(
           UnaryConstraint(
             unaryOp->getOpcodeStr(unaryOp->getOpcode()).str(),
@@ -1051,6 +1059,11 @@ public:
             }
             // candidate is a function template
             if (auto callee_ftdecl = dyn_cast<FunctionTemplateDecl>(canddecl)) {
+              // ignore already constrainted callee templates
+              if (callee_ftdecl->hasAssociatedConstraints()) {
+                hasUnhandledCandidate = true;
+                break;
+              }
               // ignore pure declarations
               if (!callee_ftdecl->isThisDeclarationADefinition()) {
                 continue;
