@@ -54,6 +54,10 @@ static cl::extrahelp MoreHelp("\nMore help text...\n");
  * helper functions
  ******************************************************/
 
+bool contains(const std::string &s, char c) {
+  return s.find(c) != std::string::npos;
+}
+
 bool startsWith(const std::string &s1, const std::string &s2) {
   if (s1.size() < s2.size()) {
     return false;
@@ -2561,7 +2565,9 @@ public:
         // prepare for rewriting
         if (sccnontrivial) {
           if (insertions.count(ftdecl) == 0) {
-            insertions[ftdecl] = "\nrequires\n" + sccstr;
+            auto ln = context.getFullLoc(ftdecl->getBeginLoc()).getSpellingLineNumber();
+            std::string header = "// added by concept-synth, original LN: " + std::to_string(ln);
+            insertions[ftdecl] = "\n" + header + "\nrequires\n" + sccstr;
           } else {
             insertions[ftdecl] = insertions[ftdecl] + " &&\n" + sccstr;
           }
@@ -2614,13 +2620,64 @@ public:
 
     /* rewrite */
 
+    auto templateTypeParmNameAdjuster = [](
+      const TemplateParameterList *deflist,
+      const TemplateParameterList *decllist,
+      std::string &code
+    ) -> void {
+      if (deflist == decllist) {
+        return;
+      }
+      int n = deflist->size();
+      assert(n == decllist->size());
+      std::vector<std::pair<std::string, std::string>> prs;
+      for (int i = 0; i < n; i++) {
+        std::string a = deflist->getParam(i)->getNameAsString();
+        std::string b = decllist->getParam(i)->getNameAsString();
+        if (a != b) {
+          prs.push_back(std::make_pair(std::move(a), std::move(b)));
+        }
+      }
+      std::vector<std::tuple<std::string::size_type, std::string::size_type, std::string>> replacements;
+      auto code_len = code.size();
+      for (const auto &[a, b] : prs) {
+        auto a_len = a.size();
+        std::string::size_type cur = 0;
+        while (cur < code_len) {
+          auto pos = code.find(a, cur);
+          if (pos == std::string::npos) {
+            break;
+          } else {
+            if (pos - 1 >= 0 && contains(" ()<>,", code[pos - 1]) &&
+                pos + a_len < code_len && contains(" ()<>,", code[pos + a_len])) {
+              replacements.push_back(std::make_tuple(pos, a_len, b));
+              cur = pos + a_len;
+            } else {
+              cur = pos + 1;
+            }
+          }
+        }
+      }
+      std::sort(replacements.begin(), replacements.end());
+      std::reverse(replacements.begin(), replacements.end());
+      for (const auto &[pos, len, str] : replacements) {
+        code.replace(pos, len, str);
+      }
+    };
+
     for (const auto &p : insertions) {
-      auto ftdecl = p.first;
-      auto code = p.second;
+      auto ftdef = p.first;
       // add constraints to all declarations
       // assume there is no declaration after p.first which is the definition
+      auto ftdecl = ftdef;
       while (true) {
         auto rangleloc = ftdecl->getTemplateParameters()->getRAngleLoc();
+        std::string code = p.second; // make a copy here
+        templateTypeParmNameAdjuster(
+          ftdef->getTemplateParameters(),
+          ftdecl->getTemplateParameters(),
+          code
+        );
         rewriter.InsertTextAfterToken(rangleloc, code);
         auto prev = ftdecl->getPreviousDecl();
         if (prev) {

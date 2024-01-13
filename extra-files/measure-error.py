@@ -41,6 +41,15 @@ def approx(a: int, b: int) -> bool:
 def get_callee_name(call: str) -> str:
     return call.split("(")[0]
 
+def get_number_of_clang_errors(err: str) -> int:
+    lines = err.splitlines()
+    while lines:
+        line = lines.pop().strip()
+        if line.endswith("error generated.") or line.endswith("errors generated."):
+            return int(line.split()[0])
+            break
+    return -1
+
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         sys.exit(f"Usage: python3 {sys.argv[0]} <origin> <output> [name-prefix]")
@@ -48,30 +57,30 @@ if __name__ == '__main__':
         origin = f1.read().strip()
     with open(sys.argv[2], "r") as f2:
         err_calls, rewritten = read_code(f2.read())
+    with open("rewritten.cc", "w") as f3:
+        f3.write(rewritten)
     if len(sys.argv) == 4:
         err_calls = [ec for ec in err_calls if ec.startswith(sys.argv[3])]
-    err_calls = err_calls[:100]
     n = len(err_calls)
-    or_len_tot, re_len_tot, cnt = 0, 0, 0
+    or_ne_tot, re_ne_tot, cnt = 0, 0, 0
     err_lst = []
     for (i, call) in enumerate(err_calls):
         origin_err = execute(["clang++", "-x", "c++", "-w", "-std=c++20", "-"], compose(origin, call))
         rewritten_err = execute(["clang++", "-x", "c++", "-w", "-std=c++20", "-"], compose(rewritten, call))
-        err_lst.append((origin_err, rewritten_err))
-        or_len = len(origin_err.splitlines())
-        re_len = len(rewritten_err.splitlines())
-        if not approx(or_len, re_len):
-            name = get_callee_name(call)
-            print(f"{i + 1}/{n}: or_len = {or_len},\tre_len = {re_len},\tname = {name}")
-            or_len_tot += or_len
-            re_len_tot += re_len
-            cnt += 1
+        err_lst.append((i + 1, origin_err, rewritten_err))
+        or_ne = get_number_of_clang_errors(origin_err)
+        re_ne = get_number_of_clang_errors(rewritten_err)
+        name = get_callee_name(call)
+        print(f"{i + 1}/{n}: or_ne = {or_ne},\tre_ne = {re_ne},\tname = {name}")
+        or_ne_tot += or_ne
+        re_ne_tot += re_ne
+        cnt += 1
     if cnt > 0:
-        print(f"or_len_avg = {round(or_len_tot / cnt, 3)},\tre_len_avg = {round(re_len_tot / cnt, 3)}")
-    with open("result", "w") as f3:
-        for or_err, re_err in err_lst:
-            f3.write("{{{{{{\n")
-            f3.write(or_err + "\n")
-            f3.write("\n\n\n------\n\n\n")
-            f3.write(re_err + "\n")
-            f3.write("}}}}}}\n")
+        print(f"or_ne_avg = {round(or_ne_tot / cnt, 3)},\tre_ne_avg = {round(re_ne_tot / cnt, 3)}")
+    with open("result", "w") as f4:
+        for num, or_err, re_err in err_lst:
+            f4.write(f"[-[{num}]-]{{{{{{\n")
+            f4.write(or_err + "\n")
+            f4.write("[>----------<]\n")
+            f4.write(re_err + "\n")
+            f4.write("}}}}}}\n\n\n\n\n\n")
