@@ -41,15 +41,6 @@ def approx(a: int, b: int) -> bool:
 def get_callee_name(call: str) -> str:
     return call.split("(")[0]
 
-def get_number_of_clang_errors(err: str) -> int:
-    lines = err.splitlines()
-    while lines:
-        line = lines.pop().strip()
-        if line.endswith("error generated.") or line.endswith("errors generated."):
-            return int(line.split()[0])
-            break
-    return -1
-
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         sys.exit(f"Usage: python3 {sys.argv[0]} <origin> <output> [name-prefix]")
@@ -68,8 +59,8 @@ if __name__ == '__main__':
         origin_err = execute(["clang++", "-x", "c++", "-w", "-std=c++20", "-"], compose(origin, call))
         rewritten_err = execute(["clang++", "-x", "c++", "-w", "-std=c++20", "-"], compose(rewritten, call))
         err_lst.append((i + 1, origin_err, rewritten_err))
-        or_ne = get_number_of_clang_errors(origin_err)
-        re_ne = get_number_of_clang_errors(rewritten_err)
+        or_ne = len(origin_err.splitlines())
+        re_ne = len(rewritten_err.splitlines())
         name = get_callee_name(call)
         print(f"{i + 1}/{n}: or_ne = {or_ne},\tre_ne = {re_ne},\tname = {name}")
         or_ne_tot += or_ne
