@@ -687,6 +687,7 @@ struct std::hash<MemberConstraint> {
   }
 };
 
+// callee template type parameter declaration -> caller side type
 using BackMap = std::map<const TemplateTypeParmDecl*, SupportedType>;
 
 std::string backMapToString(const BackMap& backMap) {
@@ -1099,6 +1100,7 @@ public:
                     std::optional<SupportedType> left = std::nullopt;
                     // right: callee parm type's template type parm decl
                     const TemplateTypeParmDecl *right = nullptr;
+                    // get left
                     if (i == pos) { // special case: for current position the left is just ttpdecl
                       left = varUseExpr.ttpdecl;
                     } else {
@@ -1115,6 +1117,7 @@ public:
                         }
                       }
                     }
+                    // get right
                     right = fromQualTypeToTemplateTypeParmDecl(
                       callee_ftdecl->getAsFunction()->getParamDecl(i)->getType(),
                       callee_tplist,

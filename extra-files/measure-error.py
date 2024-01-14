@@ -52,6 +52,7 @@ if __name__ == '__main__':
         f3.write(rewritten)
     if len(sys.argv) == 4:
         err_calls = [ec for ec in err_calls if ec.startswith(sys.argv[3])]
+    err_calls = err_calls[:30]
     n = len(err_calls)
     or_ne_tot, re_ne_tot, cnt = 0, 0, 0
     err_lst = []
