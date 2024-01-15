@@ -1,20 +1,16 @@
 import json
 import os.path
 import sys
-import subprocess
+from utils import *
+from typing import List, Tuple
 
-def make_absolute(file, directory):
+def make_absolute(file: str, directory: str) -> str:
     if os.path.isabs(file):
         return file
     return os.path.abspath(os.path.join(directory, file))
 
-def execute(cmd) -> str:
-    return subprocess.run(
-        cmd,
-        text = True,
-        stdout = subprocess.PIPE,
-        stderr = subprocess.STDOUT
-    ).stdout
+def callback(result: Tuple[int, str, str]) -> None:
+    pass
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:
@@ -27,4 +23,4 @@ if __name__ == '__main__':
         [make_absolute(entry['file'], entry['directory']) for entry in database]
     )
     for file in files:
-        print(execute(['../build/bin/concept-synth', '-p', build_path, file]))
+        callback(execute(['../build/bin/concept-synth', '-p', build_path, file]))
