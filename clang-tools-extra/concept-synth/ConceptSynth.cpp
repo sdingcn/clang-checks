@@ -2365,12 +2365,32 @@ namespace namedrequirements {
       })
     },
     {
+      "UnaryFunction",
+      ConstraintPredicate({
+        FunctionConstraint(
+          std::nullopt,
+          std::vector<std::optional<Argum>>{ std::nullopt },
+          std::nullopt
+        )
+      })
+    },
+    {
       "Predicate",
       ConstraintPredicate({
         FunctionConstraint(
           std::nullopt,
           std::vector<std::optional<Argum>>{ std::nullopt },
           "bool"
+        )
+      })
+    },
+    {
+      "BinaryFunction",
+      ConstraintPredicate({
+        FunctionConstraint(
+          std::nullopt,
+          std::vector<std::optional<Argum>>{ std::nullopt, std::nullopt },
+          std::nullopt
         )
       })
     },
