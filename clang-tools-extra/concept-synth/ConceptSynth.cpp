@@ -877,7 +877,7 @@ struct VariableUseStmt {
 
   const TemplateTypeParmDecl *ttpdecl;
   const Stmt *var;
-  const Stmt *stmt;
+  const Stmt *stmt; // parent stmt; TODO: currently only consider h(var) in nested f(g(h(var)))
   ASTContext *ctx;
 };
 
