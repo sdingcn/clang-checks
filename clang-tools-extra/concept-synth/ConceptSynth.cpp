@@ -12,7 +12,6 @@
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Format.h"
-
 #include <cstdint>
 #include <cassert>
 #include <cctype>
@@ -30,8 +29,7 @@
 #include <variant>
 #include <optional>
 
-#define DEBUG llvm::errs() << "[*** DEBUG LINE " << std::to_string(__LINE__) << " ***] " << "\n"
-#define PRINT(x) llvm::errs() << "[*** PRINT LINE " << std::to_string(__LINE__) << " ***] " << x << "\n"
+#define PRINT(x) llvm::errs() << "[LINE " << std::to_string(__LINE__) << "] " << (x) << "\n"
 #define CLASS_STRING(x) ("(" + std::to_string(__LINE__) + " " + (x) + ")")
 
 using namespace clang;
@@ -51,7 +49,7 @@ static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 static cl::extrahelp MoreHelp("\nMore help text...\n");
 
 /******************************************************
- * helper functions
+ * std::string helper functions
  ******************************************************/
 
 bool contains(const std::string &s, char c) {
@@ -71,27 +69,30 @@ bool startsWith(const std::string &s1, const std::string &s2) {
   return true;
 }
 
-std::string interpolate(const std::vector<std::string> &strs) {
+std::string interpolate(const std::vector<std::string> &strs, const std::string &sep = " ") {
   std::string result;
+  bool first = true;
   for (const std::string &s : strs) {
-    if (result == "") {
-      result += " ";
+    if (first) {
+        first = false;
+    } else {
+        result += sep;
     }
     result += s;
   }
   return result;
 }
 
-std::string stringFormat(const std::string &pattern, const std::vector<std::string> &elements) {
+std::string stringFormat(const std::string &pat, const std::vector<std::string> &elems) {
   std::string result;
   int i = 0;
-  int s = elements.size();
-  for (char c : pattern) {
+  int s = elems.size();
+  for (char c : pat) {
     if (c == '#') {
       if (i >= s) {
         result += '#';
       } else {
-        result += elements[i];
+        result += elems[i];
       }
       i++;
     } else {
@@ -113,24 +114,29 @@ std::string replaceAll(const std::string &s, char p, const std::string &w) {
   return ret;
 }
 
-std::string getFullSourceLocationAsString(std::variant<const Decl*, const Stmt*> node, ASTContext *ctx) {
+/******************************************************
+ * clang helper functions
+ ******************************************************/
+
+std::string getFullSourceLocationAsString(
+  std::variant<const Decl*, const Stmt*> node, ASTContext *ctx) {
   SourceLocation sl = 
     std::holds_alternative<const Decl*>(node) ?
     std::get<const Decl*>(node)->getBeginLoc() :
     std::get<const Stmt*>(node)->getBeginLoc();
   FullSourceLoc fl = ctx->getFullLoc(sl);
   if (fl.isValid()) {
-    std::ostringstream oss;
     std::string fpath;
     if (auto f = fl.getFileEntry()) {
       fpath = f->getName().str();
+    } else {
+      fpath = "INVALID FILE PATH";
     }
     unsigned line = fl.getSpellingLineNumber();
     unsigned column = fl.getSpellingColumnNumber();
-    oss << fpath << ":" << line << ":" << column;
-    return oss.str();
+    return fpath + ":" + std::to_string(line) + ":" + std::to_string(column);
   } else {
-    return "";
+    return "INVALID LOCATION";
   }
 }
 
@@ -144,19 +150,20 @@ bool isVariadicFunctionTemplate(const FunctionTemplateDecl *ftdecl) {
   return false;
 }
 
-// ignore all sugars, qualifiers, and references
+// remove all sugars, qualifiers, and references
+// TODO: clean up this part
 QualType getCleanType(QualType t) {
   return t.getCanonicalType().getUnqualifiedType().getNonReferenceType();
 }
 
 const TemplateTypeParmDecl *fromQualTypeToTemplateTypeParmDecl(
-  QualType t, const TemplateParameterList *tplist, ASTContext *context) {
+  QualType t, const TemplateParameterList *tplist, ASTContext *ctx) {
   int n = tplist->size();
   for (int i = 0; i < n; i++) {
     auto decl = tplist->getParam(i);
     if (auto ttpdecl = dyn_cast<TemplateTypeParmDecl>(decl)) {
-      auto ttpt = context->getTypeDeclType(ttpdecl);
-      if (context->hasSameType(ttpt, getCleanType(t))) {
+      auto ttpt = ctx->getTypeDeclType(ttpdecl);
+      if (ctx->hasSameType(ttpt, getCleanType(t))) {
         return ttpdecl;
       }
     }
@@ -165,17 +172,17 @@ const TemplateTypeParmDecl *fromQualTypeToTemplateTypeParmDecl(
 }
 
 const FunctionTemplateDecl *fromTemplateTypeParmDeclToFunctionTemplateDecl(
-  const TemplateTypeParmDecl *ttpdecl, ASTContext *context) {
-  auto parents = context->getParents(*ttpdecl);
+  const TemplateTypeParmDecl *ttpdecl, ASTContext *ctx) {
+  auto parents = ctx->getParents(*ttpdecl);
   for (auto it = parents.begin(); it != parents.end(); it++) {
-    const FunctionTemplateDecl *parent = it->get<FunctionTemplateDecl>();
-    if (parent) {
+    if (auto parent = it->get<FunctionTemplateDecl>()) {
       return parent;
     }
   }
   return nullptr;
 }
 
+// this works for both functions and function template bodies
 int getNumberOfRequiredArgs(const FunctionDecl *decl) {
   int ret = 0;
   int n = decl->getNumParams();
@@ -212,10 +219,9 @@ int getArgPosition(const CallExpr *callExpr, const Stmt *stmt) {
 }
 
 const Stmt *getFirstStmtParent(const Stmt *s, ASTContext *ctx) {
-  const Stmt &ref = *s;
-  auto parents = ctx->getParents(ref);
+  auto parents = ctx->getParents(*s);
   for (auto it = parents.begin(); it != parents.end(); it++) {
-    if (const Stmt *ps = it->get<Stmt>()) {
+    if (auto ps = it->get<Stmt>()) {
       return ps;
     }
   }
@@ -223,8 +229,7 @@ const Stmt *getFirstStmtParent(const Stmt *s, ASTContext *ctx) {
 }
 
 std::optional<std::string> getTSTName(const TemplateSpecializationType *tst) {
-  auto tdecl = tst->getTemplateName().getAsTemplateDecl();
-  if (tdecl) {
+  if (auto tdecl = tst->getTemplateName().getAsTemplateDecl()) {
     return tdecl->getQualifiedNameAsString();
   } else {
     return std::nullopt;
@@ -275,6 +280,7 @@ bool isMoveOrForward(const Stmt *s) {
  * constraint classes
  ******************************************************/
 
+// TODO: support more general type traits; currently only support traits and their negations
 struct TypeTraitExpression {
   TypeTraitExpression(bool n, std::string p)
     : neg(n), predicate(std::move(p)) {}
@@ -284,9 +290,7 @@ struct TypeTraitExpression {
   }
 
   std::string toStr() const {
-    std::string content = neg ? "! " : " ";
-    content += predicate;
-    return CLASS_STRING(content);
+    return CLASS_STRING((neg ? "!" : "") + predicate);
   }
 
   bool neg;
@@ -302,9 +306,12 @@ struct TypeTraitConstraint {
   }
 
   std::string toStr() const {
-    std::string content = expr.toStr();
-    content += std::to_string(reinterpret_cast<uintptr_t>(ttpdecl));
-    return CLASS_STRING("TypeTraitConstraint " + content);
+    return CLASS_STRING(
+      "TypeTraitConstraint " +
+      expr.toStr() +
+      " " +
+      std::to_string(reinterpret_cast<uintptr_t>(ttpdecl))
+    );
   }
 
   bool match(const TypeTraitConstraint &other) const {
@@ -322,6 +329,8 @@ struct std::hash<TypeTraitConstraint> {
   }
 };
 
+// This is to check whether the struct name is a standard trait
+// TODO: std::is_void_v ...
 std::unordered_set<std::string> SupportedTraits {
   "std::is_void",
   "std::is_null_pointer",
@@ -335,14 +344,13 @@ std::unordered_set<std::string> SupportedTraits {
   "std::is_pointer"
 };
 
+// try to see whether an Expr is a trait constraint (e.g. std::is_void<T>::value)
 std::optional<TypeTraitConstraint> tryTraitConstraint(
-  const Expr *e,
-  const TemplateParameterList *tplist,
-  ASTContext *ctx
-) {
+  const Expr *e, const TemplateParameterList *tplist, ASTContext *ctx) {
   if (auto e0 = dyn_cast<ImplicitCastExpr>(e)) {
     e = e0->getSubExpr();
   }
+  // TODO: currently only support traits and their negations
   bool neg = false;
   if (auto e0 = dyn_cast<UnaryOperator>(e)) {
     if (e0->getOpcode() == UnaryOperator::Opcode::UO_LNot) {
@@ -359,8 +367,10 @@ std::optional<TypeTraitConstraint> tryTraitConstraint(
           auto name = getTSTName(tst);
           if (name.has_value() && SupportedTraits.count(name.value()) > 0) {
             auto args = tst->template_arguments();
+            // TODO: currently only support traits applied to single template arguments
             if (args.size() > 0 && args[0].getKind() == TemplateArgument::ArgKind::Type) {
-              if (auto ttpdecl = fromQualTypeToTemplateTypeParmDecl(args[0].getAsType(), tplist, ctx)) {
+              if (auto ttpdecl = fromQualTypeToTemplateTypeParmDecl(
+                args[0].getAsType(), tplist, ctx)) {
                 return TypeTraitConstraint(TypeTraitExpression(neg, name.value()), ttpdecl);
               }
             }
@@ -373,6 +383,7 @@ std::optional<TypeTraitConstraint> tryTraitConstraint(
 }
 
 // currently support non-dependent types and template type parameter types
+// used in selftype and backmaps
 using SupportedType = std::variant<QualType, const TemplateTypeParmDecl*>;
 
 std::string supportedTypeToString(const SupportedType &s) {
@@ -383,11 +394,9 @@ std::string supportedTypeToString(const SupportedType &s) {
   }
 }
 
+// try to see whether a QualType is a supported type
 std::optional<SupportedType> trySupportedType(
-  QualType t,
-  const TemplateParameterList *tplist,
-  ASTContext *ctx
-) {
+  QualType t, const TemplateParameterList *tplist, ASTContext *ctx) {
   if (t->isDependentType()) {
     auto ttpdecl = fromQualTypeToTemplateTypeParmDecl(t, tplist, ctx);
     if (ttpdecl) {
@@ -401,9 +410,7 @@ std::optional<SupportedType> trySupportedType(
 }
 
 bool matchOptionalSupportedType(
-  const std::optional<SupportedType> &t1,
-  const std::optional<SupportedType> &t2
-) {
+  const std::optional<SupportedType> &t1, const std::optional<SupportedType> &t2) {
   if (t1.has_value() && t2.has_value()) {
     return t1.value() == t2.value();
   } else {
@@ -428,10 +435,13 @@ struct UnaryConstraint {
   }
 
   std::string toStr() const {
-    std::string content = interpolate({op, optionalSupportedTypeToString(selfType), std::to_string(pos)});
-    return CLASS_STRING("UnaryConstraint " + content);
+    return CLASS_STRING(
+      "UnaryConstraint " +
+      interpolate({op, optionalSupportedTypeToString(selfType), std::to_string(pos)})
+    );
   }
 
+  // can be used as wildcards
   bool match(const UnaryConstraint &other) const {
     return op == other.op &&
            matchOptionalSupportedType(selfType, other.selfType) &&
@@ -450,6 +460,11 @@ struct std::hash<UnaryConstraint> {
   }
 };
 
+// for example
+// template <typename T> ... T a = 0; ... f(++a)
+// here ++a is a dependent expression, whose type is unresolved
+// dependent expressions are used in places like "the other operand of a binary operator"
+// TODO: currently only support unary dependent expressions
 struct DependentExpression {
   DependentExpression(const TemplateTypeParmDecl *d, std::string o, int p)
     : ttpdecl(d), op(o), pos(p) {}
@@ -459,12 +474,11 @@ struct DependentExpression {
   }
 
   std::string toStr() const {
-    std::string content = interpolate({
+    return CLASS_STRING(interpolate({
       std::to_string(reinterpret_cast<uintptr_t>(ttpdecl)),
       op,
       std::to_string(pos)
-    });
-    return CLASS_STRING(content);
+    }));
   }
 
   const TemplateTypeParmDecl *ttpdecl;
@@ -485,10 +499,7 @@ std::string argumToString(const Argum &a) {
 }
 
 std::optional<Argum> tryArgum(
-  const Expr *expr,
-  const TemplateParameterList *tplist,
-  ASTContext *ctx 
-) {
+  const Expr *expr, const TemplateParameterList *tplist, ASTContext *ctx) {
   auto t = expr->getType();
   if (t->isDependentType()) {
     if (auto ttpdecl = fromQualTypeToTemplateTypeParmDecl(t, tplist, ctx)) {
@@ -532,19 +543,20 @@ struct BinaryConstraint {
   }
 
   bool operator== (const BinaryConstraint &other) const {
-    return op == other.op && selfType == other.selfType && pos == other.pos && otherExpr == other.otherExpr;
+    return op == other.op && selfType == other.selfType &&
+      pos == other.pos && otherExpr == other.otherExpr;
   }
 
   std::string toStr() const {
-    std::string content = interpolate({
+    return CLASS_STRING("BinaryConstraint " + interpolate({
       op,
       optionalSupportedTypeToString(selfType),
       std::to_string(pos),
       (otherExpr.has_value() ? argumToString(otherExpr.value()) : "_")
-    });
-    return CLASS_STRING("BinaryConstraint " + content);
+    }));
   }
 
+  // can act as wildcards
   bool match(const BinaryConstraint &other) const {
     return op == other.op &&
            matchOptionalSupportedType(selfType, other.selfType) &&
@@ -568,9 +580,7 @@ struct std::hash<BinaryConstraint> {
 };
 
 bool matchOptionalVector(
-  const std::vector<std::optional<Argum>> &v1,
-  const std::vector<std::optional<Argum>> &v2
-) {
+  const std::vector<std::optional<Argum>> &v1, const std::vector<std::optional<Argum>> &v2) {
   int l1 = v1.size();
   int l2 = v2.size();
   if (l1 != l2) {
@@ -587,9 +597,7 @@ bool matchOptionalVector(
   }
 }
 
-std::string optionalVectorToString(
-  const std::vector<std::optional<Argum>> &v
-) {
+std::string optionalVectorToString(const std::vector<std::optional<Argum>> &v) {
   std::string ret;
   for (const auto &e : v) {
     if (ret != "") {
@@ -615,12 +623,11 @@ struct FunctionConstraint {
   }
 
   std::string toStr() const {
-    std::string content = interpolate({
+    return CLASS_STRING("FunctionConstraint " + interpolate({
       optionalSupportedTypeToString(selfType),
       optionalVectorToString(args),
       (returnType.has_value() ? returnType.value() : "_")
-    });
-    return CLASS_STRING("FunctionConstraint " + content);
+    }));
   }
 
   bool match(const FunctionConstraint &other) const {
@@ -654,14 +661,13 @@ struct MemberConstraint {
   }
 
   std::string toStr() const {
-    std::string content = interpolate({
+    return CLASS_STRING("MemberConstraint " + interpolate({
       mb,
       std::to_string(isFun ? 1 : 0),
       optionalSupportedTypeToString(selfType),
       optionalVectorToString(args),
       (returnType.has_value() ? returnType.value() : "_")
-    });
-    return CLASS_STRING("MemberConstraint " + content);
+    }));
   }
 
   bool match(const MemberConstraint &other) const {
@@ -719,10 +725,7 @@ struct TemplateDependency {
   }
 
   std::string toStr() const {
-    std::string content;
-    content += ttpdecl->getNameAsString();
-    content += backMapToString(backMap);
-    return CLASS_STRING(content);
+    return CLASS_STRING(ttpdecl->getNameAsString() + " " + backMapToString(backMap));
   }
 
   // callee's ttpdecl that current function's ttpdecl depends on
@@ -772,6 +775,7 @@ struct std::hash<CallConstraint> {
   }
 };
 
+// used in concrete dependencies
 struct ConcreteConstraint {
   ConcreteConstraint(std::optional<SupportedType> s, std::optional<SupportedType> c)
     : selfType(s), constraintType(c) {}
@@ -781,11 +785,12 @@ struct ConcreteConstraint {
   }
 
   std::string toStr() const {
-    std::string content;
-    content += optionalSupportedTypeToString(selfType);
-    content += " ";
-    content += optionalSupportedTypeToString(constraintType);
-    return CLASS_STRING("ConcreteConstraint " + content);
+    return CLASS_STRING(
+      "ConcreteConstraint " +
+      optionalSupportedTypeToString(selfType) +
+      " " +
+      optionalSupportedTypeToString(constraintType)
+    );
   }
 
   std::optional<SupportedType> selfType;
