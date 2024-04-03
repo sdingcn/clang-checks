@@ -1260,7 +1260,8 @@ private:
 };
 
 /******************************************************
- * code classes
+ * code classes (constraint code to be added into the source; mainly used for simpl. & printing)
+ * these are pure code classes; their members are all strings or similar
  * each analyzed function template gets its own separated code tree
  ******************************************************/
 
@@ -1281,6 +1282,7 @@ struct ConstraintCode {
 
   virtual ~ConstraintCode() {}
 
+  // roughly means "non-empty"
   virtual bool isValid() const {
     return true;
   }
@@ -1298,6 +1300,7 @@ struct ConstraintCode {
   }
 
   // get new simplified code tree (not a subtree or anything of the original code tree)
+  // cpool is used to manage dynamic mem alloc
   virtual ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const {
     return nullptr;
   }
@@ -1691,7 +1694,7 @@ struct ConjunctionConstraintCode : public ConstraintCode {
     if (result == "") {
       return "(true)";
     } else {
-      return replaceAll("(\n" + result, '\n', "\n ") + "\n)";
+      return replaceAll("(\n" + result, '\n', "\n ") + "\n)"; // indent
     }
   }
 
@@ -1708,9 +1711,9 @@ struct ConjunctionConstraintCode : public ConstraintCode {
     int cnt = 0;
     std::unordered_set<std::string> deduplicate;
     for (auto c : conjuncts) {
-      std::vector<ConstraintCode*> targets;
-      auto sc = c->getSimplified(cpool);
-      if (sc->getSTag() == STag::C) {
+      std::vector<ConstraintCode*> targets; // may contain multiple targets due to conj-removal
+      auto sc = c->getSimplified(cpool); // recursive simplification
+      if (sc->getSTag() == STag::C) { // remove one layer of conjunctions
         for (auto child : sc->getSubtrees()) {
           targets.push_back(child);
         }
@@ -1719,10 +1722,10 @@ struct ConjunctionConstraintCode : public ConstraintCode {
       }
       for (auto target : targets) {
         std::string s = target->toStr();
-        if (s == "true") {
+        if (s == "true") { // trivial conjuncts
           continue;
         }
-        if (s == "false") {
+        if (s == "false") { // the entire conjunction is trivially false
           auto l = cpool.poolNew<LiteralConstraintCode>();
           l->value = "false";
           return l;
@@ -1792,6 +1795,7 @@ struct DisjunctionConstraintCode : public ConstraintCode {
     return disjuncts;
   }
 
+  // similar to the conj case
   ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const override {
     std::vector<ConstraintCode*> newDisjuncts;
     int cnt = 0;
@@ -1841,9 +1845,9 @@ struct DisjunctionConstraintCode : public ConstraintCode {
 };
 
 /******************************************************
- * formula classes
+ * formula classes (compact rep of the constraints)
  * the entire translation unit share the same formula DAG
- * in detail: if both f<>() and g<>() calls h<>(), then both f<>() and g<>() point to h<>()'s formula
+ * in detail: if both f<>() and g<>() call h<>(), then both f<>() and g<>() point to h<>()
  ******************************************************/
 
 class Formula {
@@ -1864,14 +1868,14 @@ public:
     return -1;
   }
 
+  // currently the evaluator only does "has_constraint" type named requirements
   virtual bool evaluate(const std::function<bool(const AtomicConstraint&)> &has_constraint) const {
     return true;
   }
 
+  // get an independent constraint code tree
   virtual ConstraintCode *getConstraintCode(
-    std::vector<const BackMap*> &backMaps,
-    Pool<ConstraintCode> &cpool
-  ) const {
+    std::vector<const BackMap*> &backMaps, Pool<ConstraintCode> &cpool) const {
     return nullptr;
   }
 };
@@ -1907,9 +1911,7 @@ public:
   }
 
   ConstraintCode *getConstraintCode(
-    std::vector<const BackMap*> &backMaps,
-    Pool<ConstraintCode> &cpool
-  ) const override {
+    std::vector<const BackMap*> &backMaps, Pool<ConstraintCode> &cpool) const override {
     auto l = cpool.poolNew<LiteralConstraintCode>();
     l->value = value ? "true" : "false";
     return l;
@@ -1960,9 +1962,7 @@ public:
   }
 
   ConstraintCode *getConstraintCode(
-    std::vector<const BackMap*> &backMaps,
-    Pool<ConstraintCode> &cpool
-  ) const override {
+    std::vector<const BackMap*> &backMaps, Pool<ConstraintCode> &cpool) const override {
     // get rid of complicated types that we cannot print reliably
     // and do some other transformations
     auto typeFilter = [&](const std::string &type) -> std::string {
@@ -1992,6 +1992,7 @@ public:
           return typeFilter(getCleanType(std::get<QualType>(st)).getAsString());
         } else {
           auto ttpdecl = std::get<const TemplateTypeParmDecl*>(st);
+          // chained backmaps
           for (auto backMapPtr = backMaps.rbegin(); backMapPtr != backMaps.rend(); backMapPtr++) {
             if ((**backMapPtr).count(ttpdecl) == 0) {
               return "";
@@ -2004,6 +2005,7 @@ public:
               }
             }
           }
+          // top-level TTP
           return ttpdecl->getNameAsString();
         }
       } else {
@@ -2011,6 +2013,7 @@ public:
       }
     };
 
+// return true when the constraint is incomplete
 #define CHECK_RETURN(c) do {\
   if ((c)->isValid()) {\
     return (c);\
@@ -2048,6 +2051,7 @@ public:
       bcc->selfType = resolveType(b.selfType);
       if (b.otherExpr.has_value()) {
         const Argum &e = b.otherExpr.value();
+        // two types of the-other-arg
         if (std::holds_alternative<QualType>(e)) {
           bcc->otherType = typeFilter(getCleanType(std::get<QualType>(e)).getAsString());
           bcc->otherExpr = "x1";
@@ -2068,7 +2072,8 @@ public:
         if (a.has_value()) {
           const Argum &e = a.value();
           if (std::holds_alternative<QualType>(e)) {
-            fcc->parameterTypes.push_back(typeFilter(getCleanType(std::get<QualType>(e)).getAsString()));
+            fcc->parameterTypes.push_back(
+              typeFilter(getCleanType(std::get<QualType>(e)).getAsString()));
             fcc->args.push_back(varName);
           } else {
             const DependentExpression &de = std::get<DependentExpression>(e);
@@ -2098,7 +2103,8 @@ public:
         if (a.has_value()) {
           const Argum &e = a.value();
           if (std::holds_alternative<QualType>(e)) {
-            mcc->parameterTypes.push_back(typeFilter(getCleanType(std::get<QualType>(e)).getAsString()));
+            mcc->parameterTypes.push_back(
+              typeFilter(getCleanType(std::get<QualType>(e)).getAsString()));
             mcc->args.push_back(varName);
           } else {
             const DependentExpression &de = std::get<DependentExpression>(e);
@@ -2158,9 +2164,7 @@ public:
   }
 
   ConstraintCode *getConstraintCode(
-    std::vector<const BackMap*> &backMaps,
-    Pool<ConstraintCode> &cpool
-  ) const override {
+    std::vector<const BackMap*> &backMaps, Pool<ConstraintCode> &cpool) const override {
     auto ccc = cpool.poolNew<ConjunctionConstraintCode>();
     for (auto f : conjuncts) {
       ccc->conjuncts.push_back(f->getConstraintCode(backMaps, cpool));
@@ -2215,9 +2219,7 @@ public:
   }
 
   ConstraintCode *getConstraintCode(
-    std::vector<const BackMap*> &backMaps,
-    Pool<ConstraintCode> &cpool
-  ) const override {
+    std::vector<const BackMap*> &backMaps, Pool<ConstraintCode> &cpool) const override {
     auto dcc = cpool.poolNew<DisjunctionConstraintCode>();
     for (const std::pair<Formula*, std::optional<BackMap>> &p : disjuncts) {
       if (p.second.has_value()) {
@@ -2235,6 +2237,7 @@ public:
     disjuncts.push_back(std::make_pair(f, backMap));
   }
 
+  // special: storing backmaps
   std::vector<std::pair<Formula*, std::optional<BackMap>>> disjuncts;
 };
 
@@ -2259,6 +2262,7 @@ namespace namedrequirements {
       }
     }
   
+    // can do wildcard matching
     template <typename T>
     bool match(const std::vector<T> &patterns, const T &c) const {
       for (const auto &p : patterns) {
@@ -2290,10 +2294,7 @@ namespace namedrequirements {
   };
 
   // named requirements -> has_constraint
-  std::vector<std::pair<
-    std::string,
-    std::function<bool(const AtomicConstraint&)>
-  >> requirements = {
+  std::vector<std::pair<std::string, std::function<bool(const AtomicConstraint&)>>> requirements = {
     {
       "Iterator",
       ConstraintPredicate({
@@ -2470,6 +2471,8 @@ namespace namedrequirements {
 
 }
 
+// named requirement infer
+// directly work on the compact rep (Formula)
 std::vector<std::string> infer(const Formula *formula) {
   std::vector<std::string> requirements;
   // As an extension we may add support of two or more named requirements.
@@ -2502,6 +2505,7 @@ public:
     std::unordered_map<const TemplateTypeParmDecl*, Formula*> results;
     Pool<Formula> fpool;
 
+    // we don't do formula simpl.; simpl. only happens within the ConstraintCode classes
     std::function<Formula*(const TemplateTypeParmDecl*)> dfs =
       [&](const TemplateTypeParmDecl *ttpd) -> Formula* {
       if (status[ttpd] == 0) { // not visited (default value)
@@ -2528,7 +2532,8 @@ public:
             auto disj = fpool.poolNew<Disjunction>();
             for (const auto &cc : c.dependencies) {
               if (std::holds_alternative<QualType>(cc)) {
-                auto a = fpool.poolNew<Atomic>(ConcreteConstraint(c.selfType, std::get<QualType>(cc)));
+                auto a = fpool.poolNew<Atomic>(
+                  ConcreteConstraint(c.selfType, std::get<QualType>(cc)));
                 disj->addDisjunct(a);
               } else if (std::holds_alternative<TemplateDependency>(cc)) {
                 const auto &td = std::get<TemplateDependency>(cc);
@@ -2560,12 +2565,13 @@ public:
       }
     }
 
-    /* print */
+    /* print results */
 
     std::map<const TemplateTypeParmDecl*, bool> ttpdstat;
     std::map<const FunctionTemplateDecl*, bool> ftdstat;
     std::map<const FunctionTemplateDecl*, std::string> insertions;
 
+    // prepare for statistics and insertions; print for each function template
     for (const auto &kv : results) {
       auto ttpdecl = kv.first;
       auto f = kv.second;
@@ -2596,7 +2602,7 @@ public:
             insertions[ftdecl] = insertions[ftdecl] + " &&\n" + sccstr;
           }
         }
-        // print
+        // print for each function template
         if (sccnontrivial) {
           auto ftname = ftdecl->getNameAsString();
           auto ttpname = ttpdecl->getNameAsString();
@@ -2617,7 +2623,7 @@ public:
       }
     }
 
-    /* erroneous calls */
+    // synthsize err calls for testing error message reductions
 
     llvm::outs() << "[-[Erroneous calls]-]\n";
     for (const auto &p : insertions) {
@@ -2628,7 +2634,7 @@ public:
         int n = getNumberOfRequiredArgs(ftdecl->getAsFunction());
         std::string call = name + "(";
         for (int i = 0; i < n; i++) {
-          std::string arg = "s";
+          std::string arg = "s"; // hardcoded
           if (call.back() == '(') {
             call += arg;
           } else {
@@ -2642,19 +2648,19 @@ public:
     }
     llvm::outs() << "\n";
 
-    /* rewrite */
+    // rewrite the original code (actual rewritting is in ConceptSynthAction::EndSourceFileAction)
 
-    auto templateTypeParmNameAdjuster = [](
-      const TemplateParameterList *deflist,
-      const TemplateParameterList *decllist,
-      std::string &code
-    ) -> void {
+    // decl and def may have different parameter names
+    // note that insertions[...] only contain parameters from defs
+    // this adjuster modifies "code" in-place
+    auto templateTypeParmNameAdjuster = [](const TemplateParameterList *deflist,
+      const TemplateParameterList *decllist, std::string &code) -> void {
       if (deflist == decllist) {
         return;
       }
       int n = deflist->size();
       assert(n == decllist->size());
-      std::vector<std::pair<std::string, std::string>> prs;
+      std::vector<std::pair<std::string, std::string>> prs; // name mapping
       for (int i = 0; i < n; i++) {
         std::string a = deflist->getParam(i)->getNameAsString();
         std::string b = decllist->getParam(i)->getNameAsString();
@@ -2662,7 +2668,9 @@ public:
           prs.push_back(std::make_pair(std::move(a), std::move(b)));
         }
       }
-      std::vector<std::tuple<std::string::size_type, std::string::size_type, std::string>> replacements;
+      // (a, b, c): replace [a, a + b) with c
+      std::vector<std::tuple<
+        std::string::size_type, std::string::size_type, std::string>> replacements;
       auto code_len = code.size();
       for (const auto &[a, b] : prs) {
         auto a_len = a.size();
@@ -2676,13 +2684,14 @@ public:
                 pos + a_len < code_len && contains(" ()<>,", code[pos + a_len])) {
               replacements.push_back(std::make_tuple(pos, a_len, b));
               cur = pos + a_len;
-            } else {
+            } else { // substrings?
               cur = pos + 1;
             }
           }
         }
       }
       std::sort(replacements.begin(), replacements.end());
+      // follow the reverse order, so earlier replacements won't affect later ones
       std::reverse(replacements.begin(), replacements.end());
       for (const auto &[pos, len, str] : replacements) {
         code.replace(pos, len, str);
@@ -2698,10 +2707,7 @@ public:
         auto rangleloc = ftdecl->getTemplateParameters()->getRAngleLoc();
         std::string code = p.second; // make a copy here
         templateTypeParmNameAdjuster(
-          ftdef->getTemplateParameters(),
-          ftdecl->getTemplateParameters(),
-          code
-        );
+          ftdef->getTemplateParameters(), ftdecl->getTemplateParameters(), code);
         rewriter.InsertTextAfterToken(rangleloc, code);
         auto prev = ftdecl->getPreviousDecl();
         if (prev) {
@@ -2712,7 +2718,7 @@ public:
       }
     }
 
-    /* summary */
+    // statistics
 
     llvm::outs() << "[-[Summary]-]\n";
 
@@ -2756,7 +2762,7 @@ public:
     llvm::outs() << "Total = " << pFtdCtr << "\n";
     llvm::outs() << "Nontrivial = " << pFtdNontrivialCtr << "\n";
     llvm::outs() << "Percentage = "
-                 << format("%.3f", static_cast<double>(pFtdNontrivialCtr) / pFtdCtr * 100) << "\n\n";
+      << format("%.3f", static_cast<double>(pFtdNontrivialCtr) / pFtdCtr * 100) << "\n\n";
 
   }
 
