@@ -8,7 +8,8 @@ def read_synth(s: str) -> Tuple[List[str], str, str]:
     err_calls, tail2 = tail1.split("[-[Summary]-]")
     summary, tail3 = tail2.split("[-[Rewritten code]-]")
     rewritten, _ = tail3.split("[-[Resource consumption]-]")
-    return ([ec.strip() for ec in err_calls.splitlines() if ec.strip()], rewritten.strip(), summary.strip())
+    return ([ec.strip() for ec in err_calls.splitlines() if ec.strip()],
+        rewritten.strip(), summary.strip())
 
 def compose(main: str, call: str) -> str:
     lines = main.splitlines()
@@ -65,7 +66,8 @@ def run_list(compiler: str, prep: str, rewritten: str, err_calls: List[str], err
             f.write(re_err + "\n")
             f.write("}}}}}}\n\n\n\n\n\n")
         if n > 0:
-            f.write(f"pr_ne_avg = {round(sum(pr_ne_lst) / n, 3)},\tre_ne_avg = {round(sum(re_ne_lst) / n, 3)}\n")
+            f.write(f"pr_ne_avg = {round(sum(pr_ne_lst) / n, 3)},\t")
+            f.write(f"re_ne_avg = {round(sum(re_ne_lst) / n, 3)}\n")
             f.write("[-[pr_ne_lst distribution]-]\n")
             pr_intervals = classify(pr_ne_lst)
             for begin, end, count in pr_intervals:
@@ -84,7 +86,7 @@ if __name__ == '__main__':
         name_prefix = "boost"
         errors_path = os.path.join("boost-error", compiler + "-errors.txt")
 
-        prep = preprocess(compiler, src_path, ["../../boost_1_84_0"])
+        prep = preprocess(compiler, src_path, ["../../boost_1_84_0"]) # hardcoded boost path
         with open(prep_path, "w") as f1:
             f1.write(prep)
         result = synth(prep_path)
