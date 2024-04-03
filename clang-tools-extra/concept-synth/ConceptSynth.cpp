@@ -967,14 +967,12 @@ public:
       return true;
     }
     TemplateParameterList *tplist = ftdecl->getTemplateParameters();
-#if 0
-    // initialize constraintMap
+    // initialize constraintMap (later using .at() so ...)
     for (auto p = tplist->begin(); p != tplist->end(); p++) {
       if (auto ttpdecl = dyn_cast<TemplateTypeParmDecl>(*p)) {
         constraintMap[ttpdecl].clear();
       }
     }
-#endif
     // traverse
     TraverseFunctionTemplateVisitor visitor(context, ftdecl);
     visitor.TraverseDecl(ftdecl);
