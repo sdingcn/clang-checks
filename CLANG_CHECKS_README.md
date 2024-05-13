@@ -44,7 +44,7 @@ clang-tools-extra/clang-tidy/performance/MissingMovesCheck.cpp
 #### Run the check on a single C++ source file
 
 ```
-build/bin/clang-tidy extra-files/test.cc -checks="-*,performance-missing-moves" --
+build/bin/clang-tidy <cpp-file> -checks="-*,performance-missing-moves" --
 ```
 
 Note: You may need to include library paths after the `--`.
@@ -77,7 +77,7 @@ check each replace to make sure it is correct.
 
 The concept-synth check is based on clang's RecursiveASTVisitor,
 which scans all function templates and synthesize concepts (C++20) for them
-based on (1) the template body and (2) the instantiations.
+based on the template body (and the functions / templates called by it, etc.).
 
 ### source
 
@@ -90,7 +90,7 @@ clang-tools-extra/concept-synth/ConceptSynth.cpp
 #### Run the check on a single C++ source file
 
 ```
-build/bin/concept-synth extra-files/test.cc --
+build/bin/concept-synth <cpp-file> --
 ```
 
 Note: You may need to include library paths after the `--`.
@@ -105,5 +105,5 @@ to generate the corresponding `compile_commands.json` file.
 Then use the following command to run the check
 on the entire C++ project.
 ```
-python3 extra-files/run-concept-synth.py <path-to-the-build-folder-of-the-C++-project>
+python3 concept-synth-scripts/run-concept-synth.py <path-to-the-build-folder-of-the-C++-project>
 ```

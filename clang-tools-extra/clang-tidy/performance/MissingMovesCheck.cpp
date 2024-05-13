@@ -448,10 +448,8 @@ void MissingMovesCheck::check(const MatchFinder::MatchResult &Result) {
     // (1) copying a standard container
     // (2) occurring inside loop(s)
     oss << var->getDecl()->getQualifiedNameAsString() << " is MOVABLE with score " << score(var, ctx) << ".";
-    std::string fix = std::string("std::move(")
-      + var->getDecl()->getNameAsString() + ")";
-    this->diag(call->getExprLoc(), oss.str())
-      << FixItHint::CreateReplacement(var->getSourceRange(), fix);
+    std::string fix = "std::move(" + var->getDecl()->getNameAsString() + ")";
+    this->diag(call->getExprLoc(), oss.str()) << FixItHint::CreateReplacement(var->getSourceRange(), fix);
   }
 }
 
