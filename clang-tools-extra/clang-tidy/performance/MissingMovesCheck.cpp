@@ -431,6 +431,10 @@ namespace {
 }
 
 void MissingMovesCheck::check(const MatchFinder::MatchResult &Result) {
+  // TODO
+  // If not applying fix, write all available moves into "moves.tmp".
+  // If applying fix, only insert moves in "moves.tmp".
+  // "moves.tmp" is supposed to contain integer pairs denoting the line/column of each movable variable.
   const auto *fun = Result.Nodes.getNodeAs<FunctionDecl>("node[containing-function]");
   const auto *call = Result.Nodes.getNodeAs<Expr>("node[standard-library-call]");
   if (!call) call = Result.Nodes.getNodeAs<Expr>("node[copy-construction]");
