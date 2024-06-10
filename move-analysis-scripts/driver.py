@@ -3,9 +3,15 @@ import subprocess
 import sys
 from typing import List, Tuple, Union
 
-# Assumptions on the move checker (to be implemented):
+# assumptions on the Clang-based move checker (to be implemented):
 # without -fix, the move checker dumps all feasible moves from the target C++ project into "moves.tmp"
+#     see scan_moves() below
 # with -fix, the move checker applies only the moves in "moves.tmp" to the target C++ project
+#     see apply_moves() below
+
+# the format of "moves.tmp":
+#     each line is a pair of natural numbers denoting the row and column of move
+#     the row and columns are based on the original C++ file (without any inserted new moves)
 
 def execute(cmd: List[str], i: Union[None, str]) -> Tuple[int, str, str]:
     """
@@ -71,7 +77,7 @@ def write_moves(moves: List[Tuple[int, int]]) -> None:
 
 def get_time(project_path: str) -> int:
     """
-    get the execution time of the target C++ project's benchmark
+    get the execution time of the target C++ project's benchmark (maybe running several times and getting the average)
     """
     # TODO (this is the place where I call your testing time script)
     return 0
@@ -105,12 +111,12 @@ if __name__ == '__main__':
         else:
             best_time_improvement = 0
             best_half_moves = []
-            # otherwise, try (5 times or whatever) to find (n / 2) effective moves
-            for i in range(5):
+            # otherwise, try (3 times or whatever) to find (n / 2) effective moves
+            for i in range(3):
                 random.shuffle(moves)
                 # try the left half
                 left_moves = moves[:n / 2]
-                write_moves(left_moves)
+                write_moves(left_moves) # write to "moves.tmp"
                 apply_moves(project_path)
                 left_time = get_time(project_path)
                 if best_time_improvement < original_time - left_time:
@@ -119,7 +125,7 @@ if __name__ == '__main__':
                 revert_changes(project_path)
                 # try the right half
                 right_moves = moves[n / 2:]
-                write_moves(right_moves)
+                write_moves(right_moves) # write to "moves.tmp"
                 apply_moves(project_path)
                 right_time = get_time(project_path)
                 if best_time_improvement < original_time - right_time:
@@ -127,13 +133,17 @@ if __name__ == '__main__':
                     best_half_moves = right_moves
                 revert_changes(project_path)
             if best_time_improvement == 0:
-                # failure
-                write_moves([])
+                # failure: revert back and stop
+                write_moves(moves)
+                print('Stopped trimming: unable to reduce moves further')
                 break
             else:
+                print(
+                    f'Succeeded one round with time improvement {best_time_improvement} '
+                    f'on {len(best_half_moves)} moves; writing back to "moves.tmp"...'
+                )
                 write_moves(best_half_moves)
                 # continue to the next iteration of the trimming loop
     
-    # at the end of execution, if there are <= 10 effective moves,
-    # these effective moves will be available in "moves.tmp"
+    # the effective moves (if any) will be available in "moves.tmp"
     # and you can either run the move checker with -fix to apply them or manually inspect them

@@ -53,7 +53,9 @@ for CXXOperatorCallExpr with operator=(const C&):
 #include <iostream>
 #include <string>
 #include <sstream>
+#include <fstream>
 #include <vector>
+#include <utility>
 
 using namespace clang::ast_matchers;
 using namespace clang::tidy::utils;
@@ -428,13 +430,19 @@ namespace {
     }
     return s;
   }
+  std::pair<int, int> getMoveLoc(const clang::DeclRefExpr *var, ASTContext *ctx) {
+    FullSourceLoc fl = ctx->getFullLoc(var->getBeginLoc());
+    if (fl.isValid()) {
+      unsigned line = fl.getSpellingLineNumber();
+      unsigned column = fl.getSpellingColumnNumber();
+      return std::make_pair(line, column);
+    } else {
+      return std::make_pair(-1, -1);
+    }
+  }
 }
 
 void MissingMovesCheck::check(const MatchFinder::MatchResult &Result) {
-  // TODO
-  // If not applying fix, write all available moves into "moves.tmp".
-  // If applying fix, only insert moves in "moves.tmp".
-  // "moves.tmp" is supposed to contain integer pairs denoting the line/column of each movable variable.
   const auto *fun = Result.Nodes.getNodeAs<FunctionDecl>("node[containing-function]");
   const auto *call = Result.Nodes.getNodeAs<Expr>("node[standard-library-call]");
   if (!call) call = Result.Nodes.getNodeAs<Expr>("node[copy-construction]");
@@ -446,6 +454,9 @@ void MissingMovesCheck::check(const MatchFinder::MatchResult &Result) {
   auto ctx = Result.Context;
 
   if (isMovable(fun->getBody(), call, var, ctx)) {
+    // write move loc
+    auto moveLoc = getMoveLoc(var, ctx);
+    appendToTmp(moveLoc.first, moveLoc.second);
     std::ostringstream oss;
     // the score is an intuitive measure of how costly the copy is
     // currently it is considered as costly whenever it is
@@ -455,6 +466,16 @@ void MissingMovesCheck::check(const MatchFinder::MatchResult &Result) {
     std::string fix = "std::move(" + var->getDecl()->getNameAsString() + ")";
     this->diag(call->getExprLoc(), oss.str()) << FixItHint::CreateReplacement(var->getSourceRange(), fix);
   }
+}
+
+void MissingMovesCheck::appendToTmp(int line, int column) const {
+  std::ofstream out("moves.tmp", std::ios::app);
+  out << line << ' ' << column << '\n';
+}
+
+bool MissingMovesCheck::inTmp() const {
+  // TODO
+  return true;
 }
 
 } // namespace clang::tidy::performance

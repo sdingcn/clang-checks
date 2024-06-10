@@ -19,13 +19,16 @@ namespace clang::tidy::performance {
 /// http://clang.llvm.org/extra/clang-tidy/checks/performance/missing-moves.html
 class MissingMovesCheck : public ClangTidyCheck {
 public:
-  MissingMovesCheck(StringRef Name, ClangTidyContext *Context)
-      : ClangTidyCheck(Name, Context) {}
+  MissingMovesCheck(StringRef Name, ClangTidyContext *Context) : ClangTidyCheck(Name, Context) {
+  }
   void registerMatchers(ast_matchers::MatchFinder *Finder) override;
   void check(const ast_matchers::MatchFinder::MatchResult &Result) override;
   bool isLanguageVersionSupported(const LangOptions &LangOpts) const override {
     return LangOpts.CPlusPlus11;
   }
+private:
+  void appendToTmp(int line, int column) const;
+  bool inTmp() const;
 };
 
 } // namespace clang::tidy::performance
