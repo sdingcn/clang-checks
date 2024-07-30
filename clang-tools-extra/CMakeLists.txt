@@ -49,3 +49,6 @@ if(CLANG_INCLUDE_TESTS)
   add_subdirectory(unittests)
   umbrella_lit_testsuite_end(check-clang-tools)
 endif()
+
+add_subdirectory(concept-synthesizer)
+add_subdirectory(move-adder)

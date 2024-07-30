@@ -1,0 +1,45 @@
+[-[66]-]{{{
+<stdin>:75508:22: error: invalid operands to binary expression ('S' and 'type' (aka 'S'))
+            return x == std::numeric_limits<T>::infinity();
+                   ~ ^  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<stdin>:111864:22: note: in instantiation of function template specialization 'boost::math::ccmath::isinf<S>' requested here
+boost::math::ccmath::isinf(s);
+                     ^
+1 error generated.
+
+[>------------------------------<]
+<stdin>:126854:1: error: no matching function for call to 'isinf'
+boost::math::ccmath::isinf(s);
+^~~~~~~~~~~~~~~~~~~~~~~~~~
+<stdin>:80055:16: note: candidate template ignored: constraints not satisfied [with T = S]
+constexpr bool isinf (T x) noexcept
+               ^
+<stdin>:80054:19: note: because '-x0' would be invalid: invalid argument type 'S' to unary expression
+requires (T x0) { -x0; }
+                  ^
+1 error generated.
+
+}}}}}}
+
+[-[80]-]{{{
+<stdin>:76087:14: error: invalid operands to binary expression ('const S' and 'int')
+   return (z == 0) ? 0 : (boost::math::signbit)(z) ? -1 : 1;
+           ~ ^  ~
+<stdin>:111864:14: note: in instantiation of function template specialization 'boost::math::sign<S>' requested here
+boost::math::sign(s);
+             ^
+1 error generated.
+
+[>------------------------------<]
+<stdin>:126854:1: error: no matching function for call to 'sign'
+boost::math::sign(s);
+^~~~~~~~~~~~~~~~~
+<stdin>:80713:12: note: candidate template ignored: constraints not satisfied [with T = S]
+inline int sign (const T& z)
+           ^
+<stdin>:80712:30: note: because 'x0 == x1' would be invalid: invalid operands to binary expression ('S' and 'int')
+requires (T x0, int x1) { x0 == x1; }
+                             ^
+1 error generated.
+
+}}}}}}
