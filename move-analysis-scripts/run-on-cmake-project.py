@@ -25,4 +25,4 @@ if __name__ == '__main__':
         [make_absolute(entry['file'], entry['directory']) for entry in database]
     )
     for file in files:
-        execute(['../build/bin/concept-synthesizer', '-p', build_path, file])
+        execute(['../build/bin/move-adder', '-p', build_path, file])

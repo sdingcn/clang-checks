@@ -35,7 +35,16 @@ Note: You may need to include library paths after the `--`.
 
 #### Run the check on a C++ project
 
-TODO (should be similar to concept-synthesizer)
+First generate the `compile_commands.json` file.
+For example, if the project is based on CMake,
+you can run `cmake` using the option `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`
+to generate the corresponding `compile_commands.json` file.
+
+Then use the following command to run the check
+on the entire C++ project.
+```
+python3 move-analysis-scripts/run-on-cmake-project.py <path-to-the-build-folder-of-the-C++-project>
+```
 
 ## concept-synthesizer
 
