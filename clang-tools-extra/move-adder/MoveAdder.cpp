@@ -56,12 +56,16 @@ bool isMovable(const FunctionDecl *Fun, const DeclRefExpr *VarRef, ASTContext *C
   return IsLocal && IsModifiable && IsUniqueUse;
 }
 
-std::pair<int, int> getMoveLoc(const clang::DeclRefExpr *VarRef, ASTContext *Ctx) {
+std::pair<std::string, std::pair<int, int>> getMoveLoc(
+  const clang::DeclRefExpr *VarRef, ASTContext *Ctx
+) {
   FullSourceLoc Loc = Ctx->getFullLoc(VarRef->getBeginLoc());
   if (Loc.isValid()) {
-    return std::make_pair(Loc.getSpellingLineNumber(), Loc.getSpellingColumnNumber());
+    auto FName = Loc.getFileEntry()->tryGetRealPathName().str();
+    auto FPos = std::make_pair(Loc.getSpellingLineNumber(), Loc.getSpellingColumnNumber());
+    return std::make_pair(FName, FPos);
   } else {
-    return std::make_pair(-1, -1);
+    return std::make_pair("N/A", std::make_pair(-1, -1));
   }
 }
 
@@ -87,7 +91,7 @@ public:
       llvm::outs() << "[MoveAdder]: Variable "
                    << VarRef->getDecl()->getQualifiedNameAsString()
                    << " at location "
-                   << "(" << Loc.first << ", " << Loc.second << ")"
+                   << "(" << Loc.first << ", " << Loc.second.first << ", " << Loc.second.second << ")"
                    << " is movable.\n";
     }
   }

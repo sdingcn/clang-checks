@@ -25,4 +25,4 @@ if __name__ == '__main__':
         [make_absolute(entry['file'], entry['directory']) for entry in database]
     )
     for file in files:
-        execute(['../build/bin/move-adder', '-p', build_path, file])
+        subprocess.run(['../build/bin/move-adder', '-p', build_path, file])

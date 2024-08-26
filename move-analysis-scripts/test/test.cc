@@ -1,15 +1,4 @@
-class C {
-public:
-    C() {}
-    C(const C &c) {}
-    C(C &&c) {}
-    C &operator=(const C &c) { return *this; }
-    C &operator=(C &&c) { return *this; }
-    ~C() {}
-    void f() {}
-};
-
-class D {};
+#include "test.h"
 
 void f1() {
     C c1;
