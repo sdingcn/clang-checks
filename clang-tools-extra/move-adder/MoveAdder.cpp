@@ -14,6 +14,7 @@
 #include "../clang-tidy/utils/Matchers.h"
 #include <utility>
 #include <fstream>
+#include <iostream>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -113,8 +114,6 @@ class CopyHandlerMarker : public CopyHandlerGeneric {
       // Destruct std::pair
       std::string name = Loc.first;
 
-      std::unordered_map<std::string, std::vector<MoveInfo>> moveMap;
-
       if (moveMap.count(name)) {
         moveMap[name].push_back(MoveInfo { Loc.second, VarRef });
       } else {
@@ -122,29 +121,15 @@ class CopyHandlerMarker : public CopyHandlerGeneric {
         vec.push_back(MoveInfo { Loc.second, VarRef });
         moveMap[name] = vec;
       }
-
-      this->moveIndex = consolidateMoves(moveMap);
     }
 
-    std::vector<std::pair<std::string, std::pair<int, int>>> getMoveIndex() {
-      return this->moveIndex;
-    }
-
-  private:
-    struct MoveInfo {
-      std::pair<int, int> Loc;
-      const DeclRefExpr* VarRef;
-    };
-    std::vector<std::pair<std::string, std::pair<int, int>>> moveIndex;
-
-
-    std::vector<std::pair<std::string, std::pair<int, int>>> consolidateMoves(std::unordered_map<std::string, std::vector<MoveInfo>> moveMap) {
+    std::vector<std::pair<std::string, std::pair<int, int>>> consolidateMoves() {
       std::vector<std::pair<std::string, std::pair<int, int>>> out;
       for (const auto & [fname, moves]: moveMap) {
         int currline = 0;
         int curridx = 0;
         std::string line;
-        std::fstream moveFile(fname);
+        std::ifstream moveFile(fname);
         std::vector<std::string> buff;
         bool hasfstream = false;
         if (moveFile.is_open()) {
@@ -152,27 +137,61 @@ class CopyHandlerMarker : public CopyHandlerGeneric {
             if (line.find("#include <fstream>") != std::string::npos)
               hasfstream = true;
             buff.push_back(line);
-            if (currline + 1 == moves[curridx].Loc.first) {
-              std::string cmd = "std::fstream filestr_clang_move;filestr_clang_move.open(\"" + std::filesystem::current_path().string() + "/moves.txt\", fstream::app);filestr_clang_move << \"" + "(" + fname + ":" + std::to_string(moves[curridx].Loc.first) + ":" + std::to_string(moves[curridx].Loc.second) + ")" + "\n\";filestr_clang_move.close();";
-              buff.push_back(cmd);
-              out.push_back(std::make_pair(fname, moves[curridx].Loc));
+            while (currline + 1 == moves[curridx].Loc.first) {
+              ReplaceMove(fname, moves, curridx, buff, out);
+            } 
+            if (currline == moves[curridx].Loc.first) {
               curridx++;
+              while (currline + 1 == moves[curridx].Loc.first) {
+                ReplaceMove(fname, moves, curridx, buff, out);
+              }
             }
             currline++;
           }
+
+          moveFile.close();
+
+          std::ofstream outFile(fname);
+          outFile.clear();
 
           if (!hasfstream)
             buff.insert(buff.begin(), "#include <fstream>");
 
           for (std::string line: buff) {
-            moveFile << line << "\n";
+            std::cout << line << "\n";
+            outFile << line << "\n";
           }
-          moveFile.close();
+          outFile.flush();
+          outFile.close();
         }
       }
 
       return out;
     };
+
+    private : 
+    struct MoveInfo {
+      std::pair<int, int> Loc;
+      const DeclRefExpr* VarRef;
+    };
+
+    std::unordered_map<std::string, std::vector<MoveInfo>> moveMap;
+    void ReplaceMove(
+        const std::__1::string &fname,
+        const std::__1::vector<CopyHandlerMarker::MoveInfo> &moves,
+        int &curridx, std::__1::vector<std::__1::string> &buff,
+        std::__1::vector<
+            std::__1::pair<std::__1::string, std::__1::pair<int, int>>> &out) {
+      std::string cmd =
+          "std::fstream filestr_clang_move;filestr_clang_move.open(\"" +
+          std::filesystem::current_path().string() +
+          "/moves.txt\", std::fstream::app | std::fstream::out);filestr_clang_move << \"" + "(" + fname +
+          ":" + std::to_string(moves[curridx].Loc.first) + ":" +
+          std::to_string(moves[curridx].Loc.second) + ")\";filestr_clang_move.close();";
+      buff.push_back(cmd);
+      out.push_back(std::make_pair(fname, moves[curridx].Loc));
+      curridx++;
+    }
 };
 
 int main(int argc, const char **argv) {
@@ -243,8 +262,9 @@ int main(int argc, const char **argv) {
       hasAncestor(compoundStmt()) // make sure it's in the function body
     ).bind("node[copy-assignment]");
   MatchFinder Finder;
-  CopyHandlerPrinter Handler;
+  CopyHandlerMarker Handler;
   Finder.addMatcher(CopyConstructionMatcher, &Handler);
   Finder.addMatcher(CopyAssignmentMatcher, &Handler);
-  return Tool.run(newFrontendActionFactory(&Finder).get());
+  Tool.run(newFrontendActionFactory(&Finder).get());
+  Handler.consolidateMoves();
 }
