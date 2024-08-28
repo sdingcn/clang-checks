@@ -73,8 +73,10 @@ std::pair<std::string, std::pair<int, int>> getMoveLoc(
  * main entry
  ******************************************************/
 
-class CopyHandler : public MatchFinder::MatchCallback {
+class CopyHandlerGeneric : public MatchFinder::MatchCallback {
 public:
+  virtual void moveOp(std::pair<std::string, std::pair<int, int>> Loc , const DeclRefExpr* VarRef);
+  
   virtual void run(const MatchFinder::MatchResult &Result) override {
     const auto *Fun = Result.Nodes.getNodeAs<FunctionDecl>("node[containing-function]");
     if (!Fun->isThisDeclarationADefinition()) { // not sure whether this is necessary
@@ -88,12 +90,19 @@ public:
     auto Ctx = Result.Context;
     if (isMovable(Fun, VarRef, Ctx)) {
       auto Loc = getMoveLoc(VarRef, Ctx);
-      llvm::outs() << "[MoveAdder]: Variable "
+      moveOp(Loc, VarRef);
+    }
+  }
+};
+
+class CopyHandler : public CopyHandlerGeneric {
+public:
+  virtual void moveOp(std::pair<std::string, std::pair<int, int>> Loc, const DeclRefExpr* VarRef) {
+    llvm::outs() << "[MoveAdder]: Variable "
                    << VarRef->getDecl()->getQualifiedNameAsString()
                    << " at location "
                    << "(" << Loc.first << ", " << Loc.second.first << ", " << Loc.second.second << ")"
                    << " is movable.\n";
-    }
   }
 };
 
