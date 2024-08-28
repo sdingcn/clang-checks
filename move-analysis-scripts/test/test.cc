@@ -17,4 +17,5 @@ void f3() {
 }
 
 int main() {
+    f1();
 }

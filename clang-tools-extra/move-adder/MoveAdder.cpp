@@ -124,6 +124,8 @@ class CopyHandlerMarker : public CopyHandlerGeneric {
     }
 
     std::vector<std::pair<std::string, std::pair<int, int>>> consolidateMoves() {
+      std::ofstream dummyOutput(std::filesystem::current_path().string() + "/moves.txt");
+      dummyOutput.clear();
       std::vector<std::pair<std::string, std::pair<int, int>>> out;
       for (const auto & [fname, moves]: moveMap) {
         int currline = 0;
@@ -158,7 +160,6 @@ class CopyHandlerMarker : public CopyHandlerGeneric {
             buff.insert(buff.begin(), "#include <fstream>");
 
           for (std::string line: buff) {
-            std::cout << line << "\n";
             outFile << line << "\n";
           }
           outFile.flush();
