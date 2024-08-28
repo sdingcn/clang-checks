@@ -13,6 +13,7 @@
 #include "../clang-tidy/utils/ExprSequence.h"
 #include "../clang-tidy/utils/Matchers.h"
 #include <utility>
+#include <fstream>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -104,6 +105,74 @@ public:
                    << "(" << Loc.first << ", " << Loc.second.first << ", " << Loc.second.second << ")"
                    << " is movable.\n";
   }
+};
+
+class CopyHandlerMarker : public CopyHandlerGeneric {
+  public:
+    virtual void moveOp(std::pair<std::string, std::pair<int, int>> Loc, const DeclRefExpr* VarRef) {
+      // Destruct std::pair
+      std::string name = Loc.first;
+
+      std::unordered_map<std::string, std::vector<MoveInfo>> moveMap;
+
+      if (moveMap.count(name)) {
+        moveMap[name].push_back(MoveInfo { Loc.second, VarRef });
+      } else {
+        std::vector<MoveInfo> vec;
+        vec.push_back(MoveInfo { Loc.second, VarRef });
+        moveMap[name] = vec;
+      }
+
+      this->moveIndex = consolidateMoves(moveMap);
+    }
+
+    std::vector<std::pair<std::string, std::pair<int, int>>> getMoveIndex() {
+      return this->moveIndex;
+    }
+
+  private:
+    struct MoveInfo {
+      std::pair<int, int> Loc;
+      const DeclRefExpr* VarRef;
+    };
+    std::vector<std::pair<std::string, std::pair<int, int>>> moveIndex;
+
+
+    std::vector<std::pair<std::string, std::pair<int, int>>> consolidateMoves(std::unordered_map<std::string, std::vector<MoveInfo>> moveMap) {
+      std::vector<std::pair<std::string, std::pair<int, int>>> out;
+      for (const auto & [fname, moves]: moveMap) {
+        int currline = 0;
+        int curridx = 0;
+        std::string line;
+        std::fstream moveFile(fname);
+        std::vector<std::string> buff;
+        bool hasfstream = false;
+        if (moveFile.is_open()) {
+          while (std::getline(moveFile, line)) {
+            if (line.find("#include <fstream>") != std::string::npos)
+              hasfstream = true;
+            buff.push_back(line);
+            if (currline + 1 == moves[curridx].Loc.first) {
+              std::string cmd = "std::fstream filestr_clang_move;filestr_clang_move.open(\"" + std::filesystem::current_path().string() + "/moves.txt\", fstream::app);filestr_clang_move << \"" + "(" + fname + ":" + std::to_string(moves[curridx].Loc.first) + ":" + std::to_string(moves[curridx].Loc.second) + ")" + "\n\";filestr_clang_move.close();";
+              buff.push_back(cmd);
+              out.push_back(std::make_pair(fname, moves[curridx].Loc));
+              curridx++;
+            }
+            currline++;
+          }
+
+          if (!hasfstream)
+            buff.insert(buff.begin(), "#include <fstream>");
+
+          for (std::string line: buff) {
+            moveFile << line << "\n";
+          }
+          moveFile.close();
+        }
+      }
+
+      return out;
+    };
 };
 
 int main(int argc, const char **argv) {
