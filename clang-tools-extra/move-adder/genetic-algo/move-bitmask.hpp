@@ -90,13 +90,3 @@ std::vector<MoveBitmask> MoveBitmask::createMasks(int move_number) {
 
     return out;
 }
-
-int main(void) {
-    std::vector<MoveBitmask> bitmasks = MoveBitmask::createMasks(200);
-    bitmasks[1].print();
-    bitmasks[2].print();
-    MoveBitmask mask = bitmasks[1] | bitmasks[2];
-    mask.mutate(0.1);
-    mask.print();
-    return 0;
-}
