@@ -95,7 +95,7 @@ public:
   }
 };
 
-class CopyHandler : public CopyHandlerGeneric {
+class CopyHandlerPrinter : public CopyHandlerGeneric {
 public:
   virtual void moveOp(std::pair<std::string, std::pair<int, int>> Loc, const DeclRefExpr* VarRef) {
     llvm::outs() << "[MoveAdder]: Variable "
@@ -174,7 +174,7 @@ int main(int argc, const char **argv) {
       hasAncestor(compoundStmt()) // make sure it's in the function body
     ).bind("node[copy-assignment]");
   MatchFinder Finder;
-  CopyHandler Handler;
+  CopyHandlerPrinter Handler;
   Finder.addMatcher(CopyConstructionMatcher, &Handler);
   Finder.addMatcher(CopyAssignmentMatcher, &Handler);
   return Tool.run(newFrontendActionFactory(&Finder).get());
