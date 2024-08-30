@@ -18,6 +18,7 @@
 #include <clang/Rewrite/Core/Rewriter.h>
 #include <clang/Rewrite/Frontend/Rewriters.h>
 #include <clang/Tooling/CommonOptionsParser.h>
+#include "include-visitor.hpp"
 
 using namespace clang;
 using namespace clang::tooling;
@@ -64,7 +65,9 @@ class TestDivider {
             FixedCompilationDatabase Compilations(".", std::vector<std::string>());
 
             ClangTool Tool(Compilations, this->sample_files);
-
+            if (Tool.run(newFrontendActionFactory<IncludeFinderAction>().get()) != 0)
+                std::cerr << "Error adding include" << std::endl;
+                return;
             if (Tool.run(newFrontendActionFactory(&Finder).get()) != 0) 
                 std::cerr << "Error marking function" << std::endl;
         }
