@@ -1,5 +1,4 @@
 #include <utility>
-#include <stdexcept>
 #include <iostream>
 #include <vector>
 #include <random>
@@ -37,7 +36,7 @@ class MoveBitmask {
 
         MoveBitmask operator|(MoveBitmask& other) {
             if (other.getSize() != this->getSize()) {
-                throw std::invalid_argument("MoveBitmasks must be same size");
+                std::cerr << "MoveBitmasks must be same size";
             }
 
             long* out = new long[this->getSize()];

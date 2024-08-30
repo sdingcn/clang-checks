@@ -14,6 +14,7 @@
 #include "../clang-tidy/utils/Matchers.h"
 #include "./genetic-algo/include-visitor.hpp"
 #include "./genetic-algo/test-divider.hpp"
+#include "./genetic-algo/move-bitmask.hpp"
 #include <utility>
 #include <fstream>
 #include <iostream>
