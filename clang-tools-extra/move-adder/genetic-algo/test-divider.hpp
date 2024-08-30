@@ -15,6 +15,9 @@
 #include <utility>
 #include <fstream>
 #include <iostream>
+#include <clang/Rewrite/Core/Rewriter.h>
+#include <clang/Rewrite/Frontend/Rewriters.h>
+#include <clang/Tooling/CommonOptionsParser.h>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -27,8 +30,14 @@ class FunctionMarker : public MatchFinder::MatchCallback {
     virtual void run(const MatchFinder::MatchResult &Result) {
         const auto Ctx = Result.Context;
         const auto FuncRef = Result.Nodes.getNodeAs<FunctionDecl>("functionDecl");
-        if (FuncRef)
-            std::cout << FuncRef->getBeginLoc().printToString(*Result.SourceManager) << "\n";
+        Rewriter TheRewriter;
+        if (FuncRef && FuncRef->hasBody()) {
+            auto StartLoc = FuncRef->getBody()->getSourceRange().getBegin().getLocWithOffset(1);
+            std::string cmd = "std::fstream filestr_clang_move;filestr_clang_move.open(\"" +
+            std::filesystem::current_path().string() +
+            "/moves.txt\", std::fstream::app | std::fstream::out);filestr_clang_move << \"" + "(" + Result.SourceManager->getFilename(FuncRef->getBeginLoc()).str() + ")\";";
+            TheRewriter.InsertText(StartLoc, cmd);
+        }
     }
 };
 
@@ -45,9 +54,6 @@ class TestDivider {
 
         void parseFiles() {
             auto FunctionMatcher = functionDecl();
-            // for (auto file = sample_files.begin(); file < sample_files.end(); file++) {
-                
-            // }
             FixedCompilationDatabase Compilations(".", std::vector<std::string>());
             FunctionMarker Marker;
 
