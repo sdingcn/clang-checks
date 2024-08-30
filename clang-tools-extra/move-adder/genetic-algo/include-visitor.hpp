@@ -1,34 +1,35 @@
+#ifndef INCLUDE_VISITOR_HPP
+#define INCLUDE_VISITOR_HPP
 #include <iostream>
-#include <string>
-#include <clang/AST/ASTConsumer.h>
-#include <clang/AST/RecursiveASTVisitor.h>
-#include <clang/Frontend/FrontendActions.h>
-#include <clang/Rewrite/Core/Rewriter.h>
-#include <clang/Tooling/CommonOptionsParser.h>
-#include <clang/Tooling/Tooling.h>
-#include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/FrontendAction.h>
+#include <clang/Lex/Preprocessor.h>
+#include <clang/Frontend/CompilerInstance.h>
+#include <clang/Basic/SourceManager.h>
+#include <clang/Rewrite/Core/Rewriter.h>
+#endif
 
 using namespace clang;
-using namespace clang::tooling;
 
-class IncludeFinderVisitor : public RecursiveASTVisitor<IncludeFinderVisitor> {
+class IncludeFinderCallback : public PPCallbacks {
 public:
-    IncludeFinderVisitor(Rewriter &R) : TheRewriter(R), FoundInclude(false) {}
+    IncludeFinderCallback(Rewriter &R) : TheRewriter(R), FoundInclude(false) {}
 
-    bool VisitDecl(Decl *D) {
+    void InclusionDirective(SourceLocation HashLoc,
+                                  const Token &IncludeTok, StringRef FileName,
+                                  bool IsAngled, CharSourceRange FilenameRange,
+                                  OptionalFileEntryRef File,
+                                  StringRef SearchPath, StringRef RelativePath,
+                                  const Module *SuggestedModule,
+                                  bool ModuleImported,
+                                  SrcMgr::CharacteristicKind FileType) override {
         if (FoundInclude) {
-            return true; // Stop if the include is already found
+            return;
         }
 
-        if (auto *ID = dyn_cast<InclusionDirective>(D)) {
-            std::string IncludeName = ID->getFileName().str();
-            if (IncludeName == "fstream") {
-                FoundInclude = true;
-            }
+        if (FileName == "fstream") {
+            FoundInclude = true;
+            llvm::outs() << "#include <fstream> is found.\n";
         }
-
-        return true;
     }
 
     bool shouldInsertInclude() const {
@@ -40,26 +41,7 @@ private:
     bool FoundInclude;
 };
 
-class IncludeFinderConsumer : public ASTConsumer {
-public:
-    IncludeFinderConsumer(Rewriter &R) : Visitor(R), TheRewriter(R) {}
-
-    void HandleTranslationUnit(ASTContext &Context) override {
-        Visitor.TraverseDecl(Context.getTranslationUnitDecl());
-
-        if (Visitor.shouldInsertInclude()) {
-            const FileID MainFileID = TheRewriter.getSourceMgr().getMainFileID();
-            SourceLocation InsertLoc = TheRewriter.getSourceMgr().getLocForStartOfFile(MainFileID);
-            TheRewriter.InsertText(InsertLoc, "#include <vector>\n", true, true);
-        }
-    }
-
-private:
-    IncludeFinderVisitor Visitor;
-    Rewriter &TheRewriter;
-};
-
-class IncludeFinderAction : public ASTFrontendAction {
+class IncludeFinderAction : public PreprocessorFrontendAction {
 public:
     IncludeFinderAction() {}
 
@@ -67,9 +49,11 @@ public:
         TheRewriter.getEditBuffer(TheRewriter.getSourceMgr().getMainFileID()).write(llvm::outs());
     }
 
-    std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI, StringRef file) override {
-        TheRewriter.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
-        return std::make_unique<IncludeFinderConsumer>(TheRewriter);
+    void ExecuteAction() override {
+        // Set up the rewriter
+        TheRewriter.setSourceMgr(getCompilerInstance().getSourceManager(), getCompilerInstance().getLangOpts());
+        // Add the preprocessor callback
+        getCompilerInstance().getPreprocessor().addPPCallbacks(std::make_unique<IncludeFinderCallback>(TheRewriter));
     }
 
 private:

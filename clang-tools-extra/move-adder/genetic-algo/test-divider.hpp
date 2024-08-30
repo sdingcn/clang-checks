@@ -1,3 +1,6 @@
+#ifndef INCLUDE_VISITOR_HPP
+#include "include-visitor.hpp"
+#endif
 #include "clang/Frontend/FrontendActions.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
@@ -18,14 +21,13 @@
 #include <clang/Rewrite/Core/Rewriter.h>
 #include <clang/Rewrite/Frontend/Rewriters.h>
 #include <clang/Tooling/CommonOptionsParser.h>
-#include "include-visitor.hpp"
 
 using namespace clang;
 using namespace clang::tooling;
 using namespace clang::ast_matchers;
 using namespace clang::tidy::utils;
 
-static llvm::cl::OptionCategory MyToolCategory("my-tool options");
+static llvm::cl::OptionCategory TestDividerCategory("my-tool options");
 
 class FunctionMarker : public MatchFinder::MatchCallback {
     virtual void run(const MatchFinder::MatchResult &Result) {
@@ -58,7 +60,7 @@ class TestDivider {
 
         void parseFiles() {
             auto FunctionMatcher = functionDecl();
-            FixedCompilationDatabase Compilations(".", std::vector<std::string>());
+            FixedCompilationDatabase CompilationsDBTestDivider(".", std::vector<std::string>());
             Rewriter TheRewriter;
             FunctionMarker Marker(TheRewriter);
 
@@ -66,9 +68,7 @@ class TestDivider {
 
             Finder.addMatcher(functionDecl().bind("functionDecl"), &Marker);
 
-            FixedCompilationDatabase Compilations(".", std::vector<std::string>());
-
-            ClangTool Tool(Compilations, this->sample_files);
+            ClangTool Tool(CompilationsDBTestDivider, this->sample_files);
             if (Tool.run(newFrontendActionFactory<IncludeFinderAction>().get()) != 0)
                 std::cerr << "Error adding include" << std::endl;
                 return;

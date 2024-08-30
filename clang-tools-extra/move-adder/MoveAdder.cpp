@@ -13,6 +13,7 @@
 #include "../clang-tidy/utils/ExprSequence.h"
 #include "../clang-tidy/utils/Matchers.h"
 #include "./genetic-algo/include-visitor.hpp"
+#include "./genetic-algo/test-divider.hpp"
 #include <utility>
 #include <fstream>
 #include <iostream>
