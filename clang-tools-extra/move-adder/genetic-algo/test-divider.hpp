@@ -34,17 +34,45 @@ class FunctionMarker : public MatchFinder::MatchCallback {
         const auto Ctx = Result.Context;
         const auto FuncRef = Result.Nodes.getNodeAs<FunctionDecl>("functionDecl");
         if (FuncRef && FuncRef->hasBody()) {
-            auto StartLoc = FuncRef->getBody()->getSourceRange().getBegin().getLocWithOffset(1);
+            auto StartLoc = FuncRef->getBody()->getSourceRange().getBegin();
             std::string cmd = "std::fstream filestr_clang_move;filestr_clang_move.open(\"" +
             std::filesystem::current_path().string() +
             "/moves.txt\", std::fstream::app | std::fstream::out);filestr_clang_move << \"" + "(" + Result.SourceManager->getFilename(FuncRef->getBeginLoc()).str() + ")\";";
-            TheRewriter.InsertText(StartLoc, cmd);
+            TheRewriter.InsertText(Result.SourceManager->translateLineCol(Result.SourceManager->getFileID(StartLoc), Result.SourceManager->getSpellingLineNumber(StartLoc) + 1, 1), cmd);
         }
     }
     public:
     FunctionMarker(Rewriter &R) : TheRewriter(R) {};
     private:
     Rewriter &TheRewriter;
+};
+
+class FunctionMarkerAction: public ASTFrontendAction {
+public: 
+    void EndSourceFileAction() override {
+        std::error_code EC;
+        llvm::raw_fd_ostream OutFile(
+            TheRewriter.getSourceMgr().getFileEntryForID(TheRewriter.getSourceMgr().getMainFileID())->tryGetRealPathName(),
+            EC, llvm::sys::fs::OF_None);
+
+        if (EC) {
+            llvm::errs() << "Could not open file for writing: " << EC.message() << "\n";
+            return;
+        }
+
+        TheRewriter.getEditBuffer(TheRewriter.getSourceMgr().getMainFileID()).write(OutFile);
+    }
+    std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI, StringRef file) override {
+        TheRewriter.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
+
+        MatchFinder Finder;
+        FunctionMarker Callback(TheRewriter);
+        Finder.addMatcher(functionDecl().bind("functionDecl"), &Callback);
+
+        return Finder.newASTConsumer();
+    }
+private:
+    Rewriter TheRewriter;
 };
 
 class TestDivider {
@@ -72,7 +100,7 @@ class TestDivider {
             if (Tool.run(newFrontendActionFactory<IncludeFinderAction>().get()) != 0)
                 std::cerr << "Error adding include" << std::endl;
                 return;
-            if (Tool.run(newFrontendActionFactory(&Finder).get()) != 0) 
+            if (Tool.run(newFrontendActionFactory<FunctionMarkerAction>().get()) != 0) 
                 std::cerr << "Error marking function" << std::endl;
         }
 
