@@ -31,7 +31,6 @@ class FunctionMarker : public MatchFinder::MatchCallback {
     virtual void run(const MatchFinder::MatchResult &Result) {
         const auto Ctx = Result.Context;
         const auto FuncRef = Result.Nodes.getNodeAs<FunctionDecl>("functionDecl");
-        Rewriter TheRewriter;
         if (FuncRef && FuncRef->hasBody()) {
             auto StartLoc = FuncRef->getBody()->getSourceRange().getBegin().getLocWithOffset(1);
             std::string cmd = "std::fstream filestr_clang_move;filestr_clang_move.open(\"" +
@@ -40,6 +39,10 @@ class FunctionMarker : public MatchFinder::MatchCallback {
             TheRewriter.InsertText(StartLoc, cmd);
         }
     }
+    public:
+    FunctionMarker(Rewriter &R) : TheRewriter(R) {};
+    private:
+    Rewriter &TheRewriter;
 };
 
 class TestDivider {
@@ -56,7 +59,8 @@ class TestDivider {
         void parseFiles() {
             auto FunctionMatcher = functionDecl();
             FixedCompilationDatabase Compilations(".", std::vector<std::string>());
-            FunctionMarker Marker;
+            Rewriter TheRewriter;
+            FunctionMarker Marker(TheRewriter);
 
             MatchFinder Finder;
 
