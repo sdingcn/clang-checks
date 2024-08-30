@@ -266,6 +266,10 @@ int main(int argc, const char **argv) {
   CopyHandlerMarker Handler;
   Finder.addMatcher(CopyConstructionMatcher, &Handler);
   Finder.addMatcher(CopyAssignmentMatcher, &Handler);
-  Tool.run(newFrontendActionFactory(&Finder).get());
-  Handler.consolidateMoves();
+  int res = Tool.run(newFrontendActionFactory(&Finder).get());
+  if (res == 0)
+    Handler.consolidateMoves();
+  else
+    return res;
+  return 0;
 }
