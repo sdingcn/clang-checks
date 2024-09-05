@@ -191,7 +191,7 @@ class CopyHandlerMarker : public CopyHandlerGeneric {
           std::filesystem::current_path().string() +
           "/moves.txt\", std::fstream::app | std::fstream::out);filestr_clang_move << \"" + "(" + fname +
           ":" + std::to_string(moves[curridx].Loc.first) + ":" +
-          std::to_string(moves[curridx].Loc.second) + ")\";filestr_clang_move.close();";
+          std::to_string(moves[curridx].Loc.second) + ")\" << std::endl;filestr_clang_move.close();";
       buff.push_back(cmd);
       out.push_back(std::make_pair(fname, moves[curridx].Loc));
       curridx++;

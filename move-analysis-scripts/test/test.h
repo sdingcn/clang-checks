@@ -1,3 +1,4 @@
+#include <fstream>
 #define _A
 #define _B
 #define _C
@@ -26,4 +27,5 @@ class D {};
 void ff() {
     C c1;
     C c2 = c1;
+std::fstream filestr_clang_move;filestr_clang_move.open("/Users/vidurmodgil/Desktop/Data/School/College/research/clang-checks/build/moves.txt", std::fstream::app | std::fstream::out);filestr_clang_move << "(/Users/vidurmodgil/Desktop/Data/School/College/research/clang-checks/move-analysis-scripts/test/test.h:28:12)" << std::endl;filestr_clang_move.close();
 }

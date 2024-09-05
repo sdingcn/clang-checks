@@ -60,22 +60,6 @@ class FunctionMarker : public MatchFinder::MatchCallback {
     Rewriter &TheRewriter;
 };
 
-// class FunctionMarkerAction: public ASTFrontendAction {
-// public: 
-//     std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI, StringRef file) override {
-//         CI.getDiagnostics().setSuppressAllDiagnostics(true);
-//         this->TheRewriter.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
-
-//         MatchFinder Finder;
-//         FunctionMarker Callback(this->TheRewriter);
-//         Finder.addMatcher(functionDecl(isDefinition()).bind("functionDecl"), &Callback);
-//         auto AstCons = Finder.newASTConsumer();
-//         return AstCons;
-//     }
-// private:
-//     Rewriter TheRewriter;
-// };
-
 class TestDivider {
     std::vector<std::string> sample_files;
     std::string text_store;
