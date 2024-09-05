@@ -274,5 +274,4 @@ int main(int argc, const char **argv) {
     Handler.consolidateMoves();
   else
     return res;
-  return 0;
 }
