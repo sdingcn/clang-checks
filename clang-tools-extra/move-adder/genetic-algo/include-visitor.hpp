@@ -10,52 +10,92 @@
 
 using namespace clang;
 
-class IncludeFinderCallback : public PPCallbacks {
+class IncludeInserter : public PPCallbacks {
+    bool fstreamIncluded = false;
+    Rewriter &TheRewriter;
+    
 public:
-    IncludeFinderCallback(Rewriter &R) : TheRewriter(R), FoundInclude(false) {}
+    IncludeInserter(Rewriter &R) : TheRewriter(R) {}
 
     void InclusionDirective(SourceLocation HashLoc,
-                                  const Token &IncludeTok, StringRef FileName,
-                                  bool IsAngled, CharSourceRange FilenameRange,
-                                  OptionalFileEntryRef File,
-                                  StringRef SearchPath, StringRef RelativePath,
-                                  const Module *SuggestedModule,
-                                  bool ModuleImported,
-                                  SrcMgr::CharacteristicKind FileType) override {
-        if (FoundInclude) {
-            return;
-        }
-
+                                const Token &IncludeTok, StringRef FileName,
+                                bool IsAngled, CharSourceRange FilenameRange,
+                                OptionalFileEntryRef File,
+                                StringRef SearchPath, StringRef RelativePath,
+                                const Module *SuggestedModule,
+                                bool ModuleImported,
+                                SrcMgr::CharacteristicKind FileType) override {
+        // Check if <fstream> is included
         if (FileName == "fstream") {
-            FoundInclude = true;
-            llvm::outs() << "#include <fstream> is found.\n";
+            fstreamIncluded = true;
         }
     }
 
-    bool shouldInsertInclude() const {
-        return !FoundInclude;
+    bool isFstreamIncluded() const {
+        return fstreamIncluded;
     }
 
-private:
-    Rewriter &TheRewriter;
-    bool FoundInclude;
+    void insertFstreamIncludeIfNeeded(SourceManager &SM) {
+        if (!fstreamIncluded) {
+            // Insert the include at the beginning of the file
+            SourceLocation SL = SM.getLocForStartOfFile(SM.getMainFileID());
+            TheRewriter.InsertText(SL, "#include <fstream>\n", true, true);
+        }
+    }
 };
 
-class IncludeFinderAction : public PreprocessorFrontendAction {
+class FileStreamVisitor : public RecursiveASTVisitor<FileStreamVisitor> {
+    ASTContext *Context;
+    bool usesFileStream = false;
+
 public:
-    IncludeFinderAction() {}
+    explicit FileStreamVisitor(ASTContext *Context)
+        : Context(Context) {}
 
-    void EndSourceFileAction() override {
-        TheRewriter.getEditBuffer(TheRewriter.getSourceMgr().getMainFileID()).write(llvm::outs());
+    bool VisitCXXRecordDecl(CXXRecordDecl *Declaration) {
+        // Check if the class is std::ifstream or std::ofstream
+        if (Declaration->getQualifiedNameAsString() == "std::ifstream" ||
+            Declaration->getQualifiedNameAsString() == "std::ofstream") {
+            usesFileStream = true;
+        }
+        return true;
     }
 
-    void ExecuteAction() override {
-        // Set up the rewriter
-        TheRewriter.setSourceMgr(getCompilerInstance().getSourceManager(), getCompilerInstance().getLangOpts());
-        // Add the preprocessor callback
-        getCompilerInstance().getPreprocessor().addPPCallbacks(std::make_unique<IncludeFinderCallback>(TheRewriter));
+    bool usesFileStreamInCode() const {
+        return usesFileStream;
     }
+};
 
-private:
+class FileStreamASTConsumer : public ASTConsumer {
+    FileStreamVisitor Visitor;
+    IncludeInserter &Inserter;
+
+public:
+    FileStreamASTConsumer(ASTContext *Context, IncludeInserter &Inserter)
+        : Visitor(Context), Inserter(Inserter) {}
+
+    void HandleTranslationUnit(ASTContext &Context) override {
+        Visitor.TraverseDecl(Context.getTranslationUnitDecl());
+        if (Visitor.usesFileStreamInCode()) {
+            Inserter.insertFstreamIncludeIfNeeded(Context.getSourceManager());
+        }
+    }
+};
+
+class FileStreamFrontendAction : public ASTFrontendAction {
     Rewriter TheRewriter;
+    
+public:
+    void EndSourceFileAction() override {
+        TheRewriter.getEditBuffer(TheRewriter.getSourceMgr().getMainFileID())
+            .write(llvm::outs());
+    }
+
+    std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
+                                                   StringRef file) override {
+        TheRewriter.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
+        auto Inserter = std::make_unique<IncludeInserter>(TheRewriter);
+        CI.getPreprocessor().addPPCallbacks(std::move(Inserter));
+        return std::make_unique<FileStreamASTConsumer>(&CI.getASTContext(), *Inserter);
+    }
 };

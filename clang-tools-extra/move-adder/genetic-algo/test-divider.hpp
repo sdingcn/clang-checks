@@ -108,8 +108,8 @@ class TestDivider {
                 if (entry.is_directory()) {
                     parse_dir(entry.path(), out);
                 }
-                else if (strcmp(entry.path().extension().c_str(), ".cc") == 0 || strcmp(entry.path().extension().c_str(), ".cpp") == 0) {
-                    out->push_back(std::filesystem::absolute(entry.path()).c_str());
+                if (entry.path().extension().string().compare(".cc") == 0 || entry.path().extension().string().compare("cpp") == 0) {
+                    out->push_back(std::filesystem::absolute(entry.path()).string());
                 }
             }
         }
