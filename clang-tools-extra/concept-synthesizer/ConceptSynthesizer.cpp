@@ -730,7 +730,7 @@ struct TemplateDependency {
 
   // callee's ttpdecl that current function's ttpdecl depends on
   const TemplateTypeParmDecl *ttpdecl;
-  BackMap backMap;
+  BackMap backMap; // TODO: do you really need a separate backmap for each ttpdecl?
 };
 
 // current function's ttpdecl can depend on either concrete callee types or callee ttpdecls
@@ -1069,7 +1069,7 @@ public:
             }
             // candidate is a function template
             if (auto callee_ftdecl = dyn_cast<FunctionTemplateDecl>(canddecl)) {
-              // ignore already constrainted callee templates
+              // ignore already constrainted callee templates (TODO: this is weird)
               if (callee_ftdecl->hasAssociatedConstraints()) {
                 hasUnhandledCandidate = true;
                 break;
@@ -1175,7 +1175,7 @@ public:
               );
             }
           }
-        // var used as neither callee nor arg; no constraint generated
+        // var used as neither callee nor id-callee's arg; no constraint generated
         } else {
         }
       } else if (auto mexpr = dyn_cast<CXXDependentScopeMemberExpr>(varUseExpr.stmt)) {
@@ -1297,7 +1297,7 @@ struct ConstraintCode {
     return {};
   }
 
-  // get new simplified code tree (not a subtree or anything of the original code tree)
+  // get new simplified code tree (not a subtree or any part of the original code tree)
   // cpool is used to manage dynamic mem alloc
   virtual ConstraintCode *getSimplified(Pool<ConstraintCode> &cpool) const {
     return nullptr;
@@ -2245,7 +2245,7 @@ public:
 
 namespace namedrequirements {
 
-  struct ConstraintPredicate {
+  struct ConstraintPredicate { // has_constraint: does it enforce the atomic constraint?
     ConstraintPredicate(const std::vector<AtomicConstraint> &ps) {
       for (const auto &p : ps) {
         if (std::holds_alternative<UnaryConstraint>(p)) {
@@ -2285,6 +2285,7 @@ namespace namedrequirements {
       }
     }
   
+    // these four are conjuncted together
     std::vector<UnaryConstraint> unaryPatterns;
     std::vector<BinaryConstraint> binaryPatterns;
     std::vector<FunctionConstraint> functionPatterns;
@@ -2470,7 +2471,8 @@ namespace namedrequirements {
 }
 
 // named requirement infer
-// directly work on the compact rep (Formula)
+// directly works on the compact rep (Formula)
+// returns a set of candidates
 std::vector<std::string> infer(const Formula *formula) {
   std::vector<std::string> requirements;
   // As an extension we may add support of two or more named requirements.
@@ -2621,7 +2623,7 @@ public:
       }
     }
 
-    // synthsize err calls for testing error message reductions
+    // synthsize err calls for testing error message reductions (this part will be removed later)
 
     llvm::outs() << "[-[Erroneous calls]-]\n";
     for (const auto &p : insertions) {

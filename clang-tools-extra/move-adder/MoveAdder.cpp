@@ -73,6 +73,31 @@ std::pair<std::string, std::pair<int, int>> getMoveLoc(
  * main entry
  ******************************************************/
 
+// remove all sugars, qualifiers, and references
+// TODO: clean up this part
+QualType getCleanType(QualType t) {
+  return t.getCanonicalType().getUnqualifiedType().getNonReferenceType();
+}
+
+bool hasNonTrivialClass(const DeclRefExpr *VarRef) {
+  auto T = getCleanType(VarRef->getType());
+  auto C = T->getAsCXXRecordDecl();
+  if (C) {
+    for (auto FieldIter = C->field_begin(); FieldIter != C->field_end(); FieldIter++) {
+      FieldDecl *FP = *FieldIter;
+      QualType FT = FP->getType();
+      // TODO: add custom checks to find out "interesting non-trivial classes"
+    }
+    return (
+      C->hasNonTrivialMoveConstructor() &&
+      C->hasNonTrivialMoveAssignment() &&
+      C->hasNonTrivialDestructor()
+    );
+  } else {
+    return false;
+  }
+}
+
 class CopyHandler : public MatchFinder::MatchCallback {
 public:
   virtual void run(const MatchFinder::MatchResult &Result) override {
@@ -86,7 +111,7 @@ public:
     }
     const auto *VarRef = Result.Nodes.getNodeAs<DeclRefExpr>("node[variable]");
     auto Ctx = Result.Context;
-    if (isMovable(Fun, VarRef, Ctx)) {
+    if (hasNonTrivialClass(VarRef) && isMovable(Fun, VarRef, Ctx)) {
       auto Loc = getMoveLoc(VarRef, Ctx);
       llvm::outs() << "[MoveAdder]: Variable "
                    << VarRef->getDecl()->getQualifiedNameAsString()
@@ -116,7 +141,6 @@ int main(int argc, const char **argv) {
             cxxRecordDecl(
               hasDescendant(
                 cxxConstructorDecl(
-                  unless(isImplicit()),
                   unless(isDeleted()),
                   isMoveConstructor()
                 )
@@ -134,7 +158,6 @@ int main(int argc, const char **argv) {
             cxxRecordDecl(
               hasDescendant(
                 cxxMethodDecl(
-                  unless(isImplicit()),
                   unless(isDeleted()),
                   isMoveAssignmentOperator()
                 )
