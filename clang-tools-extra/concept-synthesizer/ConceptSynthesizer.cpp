@@ -2572,6 +2572,7 @@ public:
     std::map<const FunctionTemplateDecl*, std::string> insertions;
 
     // prepare for statistics and insertions; print for each function template
+    llvm::outs() << "[-[Individual results]-]\n";
     for (const auto &kv : results) {
       auto ttpdecl = kv.first;
       auto f = kv.second;
@@ -2606,7 +2607,7 @@ public:
         if (sccnontrivial) {
           auto ftname = ftdecl->getNameAsString();
           auto ttpname = ttpdecl->getNameAsString();
-          llvm::outs() << "[-[" << ftname << ":" << ttpname << "]-]\n"
+          llvm::outs() << "[" << ftname << ":" << ttpname << "]\n"
                        << "SourceLocation:\n"
                        << getFullSourceLocationAsString(ftdecl, &context) << "\n"
                        << "Printed constraint (original):\n"
@@ -2618,14 +2619,15 @@ public:
           for (const auto &con : inferred) {
             llvm::outs() << con << " ";
           }
-          llvm::outs() << "\n\n";
+          llvm::outs() << "\n";
         }
       }
     }
+    llvm::outs() << "[-[]-]\n";
 
-    // synthsize err calls for testing error message reductions (this part will be removed later)
+    // synthsize invalid calls for testing error message reductions (this part will be removed later)
 
-    llvm::outs() << "[-[Erroneous calls]-]\n";
+    llvm::outs() << "[-[Invalid calls]-]\n";
     for (const auto &p : insertions) {
       auto ftdecl = p.first;
       auto name = ftdecl->getQualifiedNameAsString();
@@ -2646,7 +2648,7 @@ public:
         llvm::outs() << call << "\n";
       }
     }
-    llvm::outs() << "\n";
+    llvm::outs() << "[-[]-]\n";
 
     // rewrite the original code (actual rewritting is in ConceptSynthAction::EndSourceFileAction)
 
@@ -2720,7 +2722,7 @@ public:
 
     // statistics
 
-    llvm::outs() << "[-[Summary]-]\n";
+    llvm::outs() << "[-[Statistics]-]\n";
 
     llvm::outs() << "Template Type Parameters:\n";
     int ttpdCtr = ttpdstat.size();
@@ -2762,7 +2764,8 @@ public:
     llvm::outs() << "Total = " << pFtdCtr << "\n";
     llvm::outs() << "Nontrivial = " << pFtdNontrivialCtr << "\n";
     llvm::outs() << "Percentage = "
-      << format("%.3f", static_cast<double>(pFtdNontrivialCtr) / pFtdCtr * 100) << "\n\n";
+      << format("%.3f", static_cast<double>(pFtdNontrivialCtr) / pFtdCtr * 100) << "\n";
+    llvm::outs() << "[-[]-]\n";
 
   }
 
@@ -2781,9 +2784,10 @@ public:
   }
 
   void EndSourceFileAction() override {
-    llvm::outs() << "[-[Rewritten code]-]\n";
+    llvm::outs() << "[-[Constrained code]-]\n";
     rewriter.getEditBuffer(rewriter.getSourceMgr().getMainFileID()).write(llvm::outs());
     llvm::outs() << "\n";
+    llvm::outs() << "[-[]-]\n";
   }
 
 private:
@@ -2805,6 +2809,7 @@ int main(int argc, const char **argv) {
   auto endTime = std::chrono::steady_clock::now();
   std::chrono::duration<double> secDiff = endTime - startTime;
   llvm::outs() << "[-[Resource consumption]-]\n"
-               << "Time (seconds): " << format("%.3f", secDiff.count()) << "\n\n";
+               << "Time (seconds): " << format("%.3f", secDiff.count()) << "\n";
+  llvm::outs() << "[-[]-]\n";
   return retval;
 }
