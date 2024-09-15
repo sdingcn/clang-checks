@@ -17,6 +17,7 @@ double generateRandomNumber() {
 
 class MoveBitmask {
     public:
+        static std::vector<MoveBitmask> createMasksEmpty(int move_number) ;
         static std::vector<MoveBitmask> createMasks(int number);
         MoveBitmask() = default;
         MoveBitmask(long index, int size) {
@@ -71,6 +72,26 @@ class MoveBitmask {
             this->size = size;
         }
 };
+
+std::vector<MoveBitmask> MoveBitmask::createMasksEmpty(int move_number) {
+    int size;
+
+    if (move_number % (sizeof(long) * 8)) {
+        size = move_number / (sizeof(long) * 8) + 1;
+    } else {
+        size = move_number / (sizeof(long) * 8);
+    }
+
+    std::vector<MoveBitmask> out;
+
+    int zero = 0;
+    for (int i = 0; i < move_number; i++) {
+        out.push_back(MoveBitmask(zero, size));
+    }
+
+    return out;
+}
+
 
 std::vector<MoveBitmask> MoveBitmask::createMasks(int move_number) {
     int size;
