@@ -18,14 +18,14 @@ def call_preprocessor(clang_path: str, fpath: str, ipaths: List[str]) -> str:
         cmd.append("-I" + ipath)
     result = execute(cmd)
     if result[0] != 0:
-        sys.exit(f"Error: {cmd} failed")
+        sys.exit(f"Error: {cmd} failed\n{result[2]}")
     return result[1]
 
 def call_synthesizer(synthesizer_path: str, fpath: str) -> str:
     cmd = [synthesizer_path, fpath, "--", "-std=c++20"]
     result = execute(cmd)
     if result[0] != 0:
-        sys.exit(f"Error: {cmd} failed")
+        sys.exit(f"Error: {cmd} failed\n{result[2]}")
     return result[1]
 
 def cut_synthesizer_output_section(output: str, section: str) -> str:
@@ -45,7 +45,7 @@ def get_error_message(clang_path: str, code: str) -> str:
     cmd = [clang_path, "-x", "c++", "-std=c++20", "-w", "-"]
     result = execute(cmd, code)
     if result[0] == 0:
-        sys.exit(f"Error: {cmd} didn't fail as expected")
+        sys.exit(f"Error: {cmd} didn't fail as expected\n{result[1]}")
     return result[2]
 
 def get_callee_name(call: str) -> str:
@@ -81,7 +81,7 @@ if __name__ == "__main__":
         "preprocessed": sys.argv[1] + ".preprocessed.cc",
         "constrained": sys.argv[1] + ".constrained.cc",
     }
-    preprocessed_code = call_preprocessor(paths["clang"], paths["source"], [])
+    preprocessed_code = call_preprocessor(paths["clang"], paths["source"], ["../../boost_1_84_0"])
     with open(paths["preprocessed"], "w") as f:
         f.write(preprocessed_code)
     synthesizer_output = call_synthesizer(paths["synthesizer"], paths["preprocessed"])
@@ -89,7 +89,7 @@ if __name__ == "__main__":
     invalid_calls = [
         ic
         for ic in cut_synthesizer_output_section(synthesizer_output, "Invalid calls").splitlines()
-        if ic
+        if ic and get_callee_name(ic).startswith("boost")
     ]
     statistics = cut_synthesizer_output_section(synthesizer_output, "Statistics")
     resource_consumption = cut_synthesizer_output_section(synthesizer_output, "Resource consumption")

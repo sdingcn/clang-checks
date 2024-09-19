@@ -12,7 +12,14 @@
 #include "llvm/ADT/STLExtras.h"
 #include "../clang-tidy/utils/ExprSequence.h"
 #include "../clang-tidy/utils/Matchers.h"
+#include "clang/Rewrite/Core/Rewriter.h"
+#include <vector>
+#include <string>
 #include <utility>
+#include <cmath>
+#include <cstdlib>
+#include <algorithm>
+#include <random>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -98,6 +105,13 @@ bool hasNonTrivialClass(const DeclRefExpr *VarRef) {
   }
 }
 
+struct MoveInfo {
+  std::string File;
+  std::pair<int, int> Loc;
+  const DeclRefExpr* VarRef;
+  ASTContext *Ctx; // TODO: remove this Ctx
+};
+
 class CopyHandler : public MatchFinder::MatchCallback {
 public:
   virtual void run(const MatchFinder::MatchResult &Result) override {
@@ -112,18 +126,83 @@ public:
     const auto *VarRef = Result.Nodes.getNodeAs<DeclRefExpr>("node[variable]");
     auto Ctx = Result.Context;
     if (hasNonTrivialClass(VarRef) && isMovable(Fun, VarRef, Ctx)) {
-      auto Loc = getMoveLoc(VarRef, Ctx);
-      llvm::outs() << "[MoveAdder]: Variable "
-                   << VarRef->getDecl()->getQualifiedNameAsString()
-                   << " at location "
-                   << "(" << Loc.first << ", " << Loc.second.first << ", " << Loc.second.second << ")"
-                   << " is movable.\n";
+      auto FileAndLoc = getMoveLoc(VarRef, Ctx);
+      movables.push_back(MoveInfo{FileAndLoc.first, FileAndLoc.second, VarRef, Ctx});
+      // llvm::outs() << "[MoveAdder]: Variable "
+      //              << VarRef->getDecl()->getQualifiedNameAsString()
+      //              << " at location "
+      //              << "(" << Loc.first << ", " << Loc.second.first << ", " << Loc.second.second << ")"
+      //              << " is movable.\n";
     }
   }
+public:
+  std::vector<MoveInfo> movables;
 };
 
+void applyMoves(const std::vector<MoveInfo> &movables) {
+  // treating the movables as just location numbers
+  // creating a new compiler instance
+  Rewriter R;
+  R.setSourceMgr((*moveable).Ctx->getSourceManager(), (*moveable).Ctx->getLangOpts());
+  for (auto moveable = movables.begin(); moveable < movables.end(); moveable++) {
+    
+    if (R.isRewritable) {
+      auto begin = (*moveable).VarRef->getBeginLoc();
+      auto end = (*moveable).VarRef->getEndLoc();
+      R.InsertTextBefore(begin, "std::move(");
+      R.InsertTextAfter(end, ")");
+    }
+  }
+  R.getEditBuffer(R.getSourceMgr().getMainFileID()).write(OutFile);
+}
+
+void resetMoves(const std::vector<MoveInfo> &movables) {
+  // remove the rewrites
+}
+
+time_t callTest(std::string testCmd) {
+  // TODO: re-compile the project
+  time_t diff = 0;
+  for (int i = 0; i < 3; i++) {
+    time_t start, end; 
+    time(&start);
+    system(testCmd.c_str());
+    time(&end);
+    diff += end - start;
+  }
+  return diff / 3;
+}
+
+void selectMoves(std::vector<MoveInfo> movables, std::string testCmd) {
+  // first try all moves
+  applyMoves(movables);
+  time_t bestTime = callTest(testCmd);
+  std::vector<MoveInfo> bestMoves = movables;
+  resetMoves(movables);
+  // try binary cut
+  int N = std::log(static_cast<double>(movables.size())) / std::log(2.0);
+  for (int i = 0; i < N; i++) {
+    std::vector<MoveInfo> newMovables;
+    for (int j = 0; j < 3; j++) {
+      auto rng = std::default_random_engine {};
+      std::shuffle(std::begin(movables), std::end(movables), rng);
+      newMovables = std::vector<MoveInfo>(movables.begin(), movables.begin() + movables.size() / 2);
+      applyMoves(newMovables);
+      time_t time = callTest(testCmd);
+      resetMoves(newMovables);
+      if (time < bestTime) { // TODO: change to significantlly smaller?
+        break;
+      }
+    }
+    movables = newMovables;
+  }
+  // print the results?
+  // for (auto m : movables) { ... }
+}
+
 int main(int argc, const char **argv) {
-  auto ExpectedParser = CommonOptionsParser::create(argc, argv, MyToolCategory);
+  int parserArgc = argc - 1;
+  auto ExpectedParser = CommonOptionsParser::create(parserArgc, argv, MyToolCategory);
   if (!ExpectedParser) {
     // Fail gracefully for unsupported options.
     llvm::errs() << ExpectedParser.takeError();
@@ -191,5 +270,9 @@ int main(int argc, const char **argv) {
   CopyHandler Handler;
   Finder.addMatcher(CopyConstructionMatcher, &Handler);
   Finder.addMatcher(CopyAssignmentMatcher, &Handler);
-  return Tool.run(newFrontendActionFactory(&Finder).get());
+  if (Tool.run(newFrontendActionFactory(&Finder).get())) {
+    // llvm::errs() << ...
+    return 1;
+  }
+  selectMoves(Handler.movables, argv[argc - 1]);
 }
