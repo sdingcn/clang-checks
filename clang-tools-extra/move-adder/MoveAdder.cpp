@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <random>
+#include <fstream>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -108,8 +109,7 @@ bool hasNonTrivialClass(const DeclRefExpr *VarRef) {
 struct MoveInfo {
   std::string File;
   std::pair<int, int> Loc;
-  const DeclRefExpr* VarRef;
-  ASTContext *Ctx; // TODO: remove this Ctx
+  std::string varName;
 };
 
 class CopyHandler : public MatchFinder::MatchCallback {
@@ -127,7 +127,7 @@ public:
     auto Ctx = Result.Context;
     if (hasNonTrivialClass(VarRef) && isMovable(Fun, VarRef, Ctx)) {
       auto FileAndLoc = getMoveLoc(VarRef, Ctx);
-      movables.push_back(MoveInfo{FileAndLoc.first, FileAndLoc.second, VarRef, Ctx});
+      movables.push_back(MoveInfo{FileAndLoc.first, FileAndLoc.second, VarRef->getNameInfo().getAsString()});
       // llvm::outs() << "[MoveAdder]: Variable "
       //              << VarRef->getDecl()->getQualifiedNameAsString()
       //              << " at location "
@@ -139,25 +139,81 @@ public:
   std::vector<MoveInfo> movables;
 };
 
+/*
+---
+for file in files.keys():
+  std::vector<VarRef> Moves = files[file]
+  Rewriter(File)
+  applyRewrites(all moves in file)
+  write to file
+*/
+
 void applyMoves(const std::vector<MoveInfo> &movables) {
-  // treating the movables as just location numbers
-  // creating a new compiler instance
+  // Maps file names/line numbers to move locations
+  std::map<std::string,
+    std::map<int, std::vector<std::pair<int, int>>>
+  > M;
+  for (auto &m : movables) {
+    // cppreference: [] inserts value_type(key, T()) if the key does not exist.
+    M[m.File][m.Loc.first].push_back(std::make_pair(m.Loc.second, m.varName.size()));
+  }
+  for (auto &p1 : M) {
+    for (auto &p2 : p1.second) {
+      std::sort(p2.second.begin(), p2.second.end(),
+        [](const std::pair<int, int> &a, const std::pair<int, int> &b) {
+          return a.first > b.first;
+        }
+      );
+    }
+  }
+  for (auto &p1 : M) {
+    std::string fname = p1.first;
+    std::fstream fs(fname, std::ios::in | std::ios::out);
+    std::vector<std::string> lines;
+    std::string line;
+    while (getline(fs, line)) {
+      lines.push_back(line);
+    }
+    for (auto &p2 : p1.second) {
+      int line = p2.first;
+      for (auto &p3 : p2.second) {
+        int column = p3.first;
+        int varLen = p3.second;
+        int endPos = column + varLen;
+        lines[line].insert(endPos, ")");
+        lines[line].insert(column, "std::move(");
+      }
+    }
+    fs << "#include <utility> \n";
+    for (auto &l : lines) {
+      fs << l << '\n';
+    }
+  }
+/*
+  for (auto moveable = movables.begin(); moveable < movables.end(); moveable++) {
+    if (moveInfoMap.contains((*moveable).File)) {
+      
+    }
+  }
   Rewriter R;
   R.setSourceMgr((*moveable).Ctx->getSourceManager(), (*moveable).Ctx->getLangOpts());
   for (auto moveable = movables.begin(); moveable < movables.end(); moveable++) {
     
     if (R.isRewritable) {
-      auto begin = (*moveable).VarRef->getBeginLoc();
-      auto end = (*moveable).VarRef->getEndLoc();
+      DeclRefExpr *VarRef;
+      auto begin = VarRef->getBeginLoc();
+      auto end = VarRef->getEndLoc();
       R.InsertTextBefore(begin, "std::move(");
       R.InsertTextAfter(end, ")");
     }
   }
   R.getEditBuffer(R.getSourceMgr().getMainFileID()).write(OutFile);
+*/
 }
 
 void resetMoves(const std::vector<MoveInfo> &movables) {
   // remove the rewrites
+  // git restore
 }
 
 time_t callTest(std::string testCmd) {
