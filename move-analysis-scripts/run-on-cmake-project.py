@@ -24,5 +24,7 @@ if __name__ == '__main__':
         # paths in the 'file' field must be either absolute or relative to the 'directory' field
         [make_absolute(entry['file'], entry['directory']) for entry in database]
     )
+    if (not os.path.exists(f"{build_path}/.git")):
+        subprocess.run(['git', 'init', build_path])
     for file in files:
         subprocess.run(['../build/bin/move-adder', '-p', build_path, file])

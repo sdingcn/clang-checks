@@ -212,8 +212,8 @@ void applyMoves(const std::vector<MoveInfo> &movables) {
 }
 
 void resetMoves(const std::vector<MoveInfo> &movables) {
-  // remove the rewrites
-  // git restore
+  // TOOD initialize git repo in concept-synth
+  system("git restore");
 }
 
 time_t callTest(std::string testCmd) {
@@ -227,6 +227,10 @@ time_t callTest(std::string testCmd) {
     diff += end - start;
   }
   return diff / 3;
+}
+
+bool hasGit(std::string path) {
+  return std::filesystem::exists(path + "/.git");
 }
 
 void selectMoves(std::vector<MoveInfo> movables, std::string testCmd) {
@@ -330,5 +334,6 @@ int main(int argc, const char **argv) {
     // llvm::errs() << ...
     return 1;
   }
+
   selectMoves(Handler.movables, argv[argc - 1]);
 }
