@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <random>
 #include <fstream>
+#include <iostream>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -260,80 +261,119 @@ void selectMoves(std::vector<MoveInfo> movables, std::string testCmd) {
   // for (auto m : movables) { ... }
 }
 
+std::vector<std::string> listFilesInDirectory(const std::string& directoryPath) {
+    std::vector<std::string> filePaths;
+
+    try {
+        // Iterate through the directory
+        for (const auto& entry : std::filesystem::directory_iterator(directoryPath)) {
+            // Check if the entry is a regular file
+            if (entry.is_regular_file()) {
+                // Add the file path to the vector
+                filePaths.push_back(entry.path().string());
+            }
+        }
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "Error accessing directory: " << e.what() << '\n';
+    }
+
+    return filePaths;
+}
+
 int main(int argc, const char **argv) {
   int parserArgc = argc - 1;
-  auto ExpectedParser = CommonOptionsParser::create(parserArgc, argv, MyToolCategory);
-  if (!ExpectedParser) {
-    // Fail gracefully for unsupported options.
-    llvm::errs() << ExpectedParser.takeError();
-    return 1;
-  }
-  CommonOptionsParser &OptionsParser = ExpectedParser.get();
-  ClangTool Tool(OptionsParser.getCompilations(),
-                 OptionsParser.getSourcePathList());
 
-  auto VarHasMoveCtorMatcher = 
-    hasType(
-      hasUnqualifiedDesugaredType(
-        recordType(
-          hasDeclaration(
-            cxxRecordDecl(
-              hasDescendant(
-                cxxConstructorDecl(
-                  unless(isDeleted()),
-                  isMoveConstructor()
+  if (argc <= 2) {
+    std::cerr << "usage: move-adder <directory> --" << std::endl;
+  }
+
+  std::vector<MoveInfo> movables;
+
+  for (std::string file: listFilesInDirectory(argv[1])) {
+    char** argv = new char*[3];
+    argv[0] = "move-adder";
+    argv[1] = new char[file.length() + 1];
+    for (int i = 0; i < file.length(); i++) {
+      argv[1][i] = file.at(i);
+    }
+    argv[1][file.length()] = '\0';
+    argv[2] = "--";
+
+    auto ExpectedParser = CommonOptionsParser::create(parserArgc, argv, MyToolCategory);
+    if (!ExpectedParser) {
+      // Fail gracefully for unsupported options.
+      llvm::errs() << ExpectedParser.takeError();
+      return 1;
+    }
+    CommonOptionsParser &OptionsParser = ExpectedParser.get();
+    ClangTool Tool(OptionsParser.getCompilations(),
+                  OptionsParser.getSourcePathList());
+
+    auto VarHasMoveCtorMatcher = 
+      hasType(
+        hasUnqualifiedDesugaredType(
+          recordType(
+            hasDeclaration(
+              cxxRecordDecl(
+                hasDescendant(
+                  cxxConstructorDecl(
+                    unless(isDeleted()),
+                    isMoveConstructor()
+                  )
                 )
               )
             )
           )
         )
-      )
-    );
-  auto VarHasMoveOpMatcher =
-    hasType(
-      hasUnqualifiedDesugaredType(
-        recordType(
-          hasDeclaration(
-            cxxRecordDecl(
-              hasDescendant(
-                cxxMethodDecl(
-                  unless(isDeleted()),
-                  isMoveAssignmentOperator()
+      );
+    auto VarHasMoveOpMatcher =
+      hasType(
+        hasUnqualifiedDesugaredType(
+          recordType(
+            hasDeclaration(
+              cxxRecordDecl(
+                hasDescendant(
+                  cxxMethodDecl(
+                    unless(isDeleted()),
+                    isMoveAssignmentOperator()
+                  )
                 )
               )
             )
           )
         )
-      )
-    );
-  auto CopyConstructionMatcher =
-    cxxConstructExpr(
-      hasDeclaration(cxxConstructorDecl(isCopyConstructor())),
-      forEachArgumentWithParam(
-        declRefExpr(VarHasMoveCtorMatcher).bind("node[variable]"),
-        parmVarDecl()
-      ),
-      hasAncestor(functionDecl(isDefinition()).bind("node[containing-function]")),
-      hasAncestor(compoundStmt()) // make sure it's in the function body
-    ).bind("node[copy-construction]");
-  auto CopyAssignmentMatcher =
-    cxxOperatorCallExpr(
-      hasDeclaration(cxxMethodDecl(isCopyAssignmentOperator())),
-      forEachArgumentWithParam(
-        declRefExpr(VarHasMoveOpMatcher).bind("node[variable]"),
-        parmVarDecl()
-      ),
-      hasAncestor(functionDecl(isDefinition()).bind("node[containing-function]")),
-      hasAncestor(compoundStmt()) // make sure it's in the function body
-    ).bind("node[copy-assignment]");
-  MatchFinder Finder;
-  CopyHandler Handler;
-  Finder.addMatcher(CopyConstructionMatcher, &Handler);
-  Finder.addMatcher(CopyAssignmentMatcher, &Handler);
-  if (Tool.run(newFrontendActionFactory(&Finder).get())) {
-    // llvm::errs() << ...
-    return 1;
+      );
+    auto CopyConstructionMatcher =
+      cxxConstructExpr(
+        hasDeclaration(cxxConstructorDecl(isCopyConstructor())),
+        forEachArgumentWithParam(
+          declRefExpr(VarHasMoveCtorMatcher).bind("node[variable]"),
+          parmVarDecl()
+        ),
+        hasAncestor(functionDecl(isDefinition()).bind("node[containing-function]")),
+        hasAncestor(compoundStmt()) // make sure it's in the function body
+      ).bind("node[copy-construction]");
+    auto CopyAssignmentMatcher =
+      cxxOperatorCallExpr(
+        hasDeclaration(cxxMethodDecl(isCopyAssignmentOperator())),
+        forEachArgumentWithParam(
+          declRefExpr(VarHasMoveOpMatcher).bind("node[variable]"),
+          parmVarDecl()
+        ),
+        hasAncestor(functionDecl(isDefinition()).bind("node[containing-function]")),
+        hasAncestor(compoundStmt()) // make sure it's in the function body
+      ).bind("node[copy-assignment]");
+    MatchFinder Finder;
+    CopyHandler Handler;
+    Finder.addMatcher(CopyConstructionMatcher, &Handler);
+    Finder.addMatcher(CopyAssignmentMatcher, &Handler);
+    if (Tool.run(newFrontendActionFactory(&Finder).get())) {
+      // llvm::errs() << ...
+      return 1;
+    }
+
+    movables.insert(movables.end(), Handler.movables.begin(), Handler.movables.end());
   }
 
-  selectMoves(Handler.movables, argv[argc - 1]);
+  selectMoves(movables, argv[argc - 1]);
 }
