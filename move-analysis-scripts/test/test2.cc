@@ -1,4 +1,4 @@
-#include "test.h"
+#include "test.hpp"
 
 void f1() {
     C c1;

@@ -22,6 +22,7 @@
 #include <random>
 #include <fstream>
 #include <iostream>
+#include <cstring>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -214,7 +215,7 @@ void applyMoves(const std::vector<MoveInfo> &movables) {
 
 void resetMoves(const std::vector<MoveInfo> &movables) {
   // TOOD initialize git repo in concept-synth
-  system("git restore");
+  system("git restore .");
 }
 
 time_t callTest(std::string testCmd) {
@@ -249,6 +250,7 @@ void selectMoves(std::vector<MoveInfo> movables, std::string testCmd) {
       std::shuffle(std::begin(movables), std::end(movables), rng);
       newMovables = std::vector<MoveInfo>(movables.begin(), movables.begin() + movables.size() / 2);
       applyMoves(newMovables);
+      system("make -j8");
       time_t time = callTest(testCmd);
       resetMoves(newMovables);
       if (time < bestTime) { // TODO: change to significantlly smaller?
@@ -264,18 +266,14 @@ void selectMoves(std::vector<MoveInfo> movables, std::string testCmd) {
 std::vector<std::string> listFilesInDirectory(const std::string& directoryPath) {
     std::vector<std::string> filePaths;
 
-    try {
-        // Iterate through the directory
-        for (const auto& entry : std::filesystem::directory_iterator(directoryPath)) {
-            // Check if the entry is a regular file
-            if (entry.is_regular_file()) {
-                // Add the file path to the vector
-                filePaths.push_back(entry.path().string());
-            }
-        }
-    } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Error accessing directory: " << e.what() << '\n';
-    }
+      // Iterate through the directory
+      for (const auto& entry : std::filesystem::directory_iterator(directoryPath)) {
+          // Check if the entry is a regular file
+          if (entry.is_regular_file()) {
+              // Add the file path to the vector
+              filePaths.push_back(entry.path().string());
+          }
+      }
 
     return filePaths;
 }
@@ -283,23 +281,31 @@ std::vector<std::string> listFilesInDirectory(const std::string& directoryPath) 
 int main(int argc, const char **argv) {
   int parserArgc = argc - 1;
 
-  if (argc <= 2) {
+  if (argc != 3) {
     std::cerr << "usage: move-adder <directory> --" << std::endl;
   }
 
   std::vector<MoveInfo> movables;
 
   for (std::string file: listFilesInDirectory(argv[1])) {
-    char** argv = new char*[3];
-    argv[0] = "move-adder";
-    argv[1] = new char[file.length() + 1];
-    for (int i = 0; i < file.length(); i++) {
-      argv[1][i] = file.at(i);
-    }
-    argv[1][file.length()] = '\0';
-    argv[2] = "--";
+    char** argv_custom = new char*[3];
+    std::string ma = "move-adder";
+    argv_custom[0] = new char[ma.length() + 1];
+    strcpy(argv_custom[0], ma.c_str());
 
-    auto ExpectedParser = CommonOptionsParser::create(parserArgc, argv, MyToolCategory);
+    argv_custom[1] = new char[file.length() + 1];
+    strcpy(argv_custom[1], file.c_str());
+
+    std::string dash = "--";
+    argv_custom[2] = new char[dash.length() + 1];
+    strcpy(argv_custom[2], dash.c_str());
+
+
+    int argc = 3;
+
+    const char** new_argv = (const char**) argv_custom;
+
+    auto ExpectedParser = CommonOptionsParser::create(argc, new_argv, MyToolCategory);
     if (!ExpectedParser) {
       // Fail gracefully for unsupported options.
       llvm::errs() << ExpectedParser.takeError();
@@ -375,5 +381,5 @@ int main(int argc, const char **argv) {
     movables.insert(movables.end(), Handler.movables.begin(), Handler.movables.end());
   }
 
-  selectMoves(movables, argv[argc - 1]);
+  // selectMoves(movables, argv[argc - 1]);
 }
