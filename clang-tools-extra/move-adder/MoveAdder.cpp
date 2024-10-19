@@ -23,11 +23,14 @@
 #include <fstream>
 #include <iostream>
 #include <cstring>
+#include <nlohmann/json.hpp>
 
 using namespace clang;
 using namespace clang::tooling;
 using namespace clang::ast_matchers;
 using namespace clang::tidy::utils;
+using json = nlohmann::json;
+
 
 // Apply a custom category to all command-line options so that they are the
 // only ones displayed.
@@ -263,19 +266,68 @@ void selectMoves(std::vector<MoveInfo> movables, std::string testCmd) {
   // for (auto m : movables) { ... }
 }
 
-std::vector<std::string> listFilesInDirectory(const std::string& directoryPath) {
+std::pair<std::vector<std::string>, std::string> listFilesInDirectory(const std::string& directoryPath) {
     std::vector<std::string> filePaths;
+    std::string compile_commands_json = "";
 
       // Iterate through the directory
-      for (const auto& entry : std::filesystem::directory_iterator(directoryPath)) {
+      for (const auto& entry : std::filesystem::recursive_directory_iterator(directoryPath)) {
           // Check if the entry is a regular file
-          if (entry.is_regular_file()) {
+          if (entry.is_regular_file() && (entry.path().extension().string() == ".cc" || entry.path().extension().string() == ".cpp" || entry.path().extension().string() == ".h" || entry.path().extension().string() == ".hpp")) {
               // Add the file path to the vector
               filePaths.push_back(entry.path().string());
           }
+          bool tmp = entry.path().filename().string() == "compile_commands.json";
+          if (tmp) {
+            compile_commands_json = entry.path().string();
+          }
       }
 
-    return filePaths;
+    return std::make_pair(filePaths, compile_commands_json);
+}
+
+std::string getCommand(std::string val) {
+  int i = 0;
+  if (val.size() == 0) {
+    std::cerr << "Invalid include path" << std::endl;
+    exit(1);
+  }
+  while (val.at(i) != ' ') {
+    if (i == val.size()) {
+      std::cerr << "Invalid include path in compile_commands.json, please regeneratae file" << std::endl;
+      exit(1);
+    }
+    i++;
+  }
+  return val.substr(i, val.size());
+}
+
+std::pair<char**, int> read_include_paths(std::string compile_commands_json) {
+  std::ifstream f(compile_commands_json);
+  json data = json::parse(f);
+  char** out = new char*[data.size()]; 
+  std::cerr << data.size() << std::endl;
+  int i = 0;
+  for (auto iter = data.items().begin(); iter != data.items().end(); iter++) {
+    std::string cmd = getCommand((iter).value()["command"]);
+    out[i] = new char[cmd.size() + 1];
+    strcpy(out[i], cmd.c_str());
+    i++;
+  }
+  return std::make_pair(out, i + 1);
+}
+
+std::pair<char**, int> concat_ptr(std::pair<char**, int> ptr1, std::pair<char**, int> ptr2) {
+  char** retVal = new char*[ptr1.second + ptr2.second];
+  for (int i = 0; i < ptr1.second; i++) {
+    retVal[i] = ptr1.first[i];
+  }
+
+  for (int i = ptr1.second; i < ptr2.second + ptr1.second; i++) {
+    retVal[i] = ptr1.first[i];
+  }
+
+  return std::make_pair(retVal, ptr1.second + ptr2.second);
 }
 
 int main(int argc, const char **argv) {
@@ -283,13 +335,22 @@ int main(int argc, const char **argv) {
 
   if (argc != 3) {
     std::cerr << "usage: move-adder <directory> --" << std::endl;
+    return 1;
   }
 
   std::vector<MoveInfo> movables;
+  auto src_files_paired_with_comp = listFilesInDirectory(argv[1]);
+  auto files = src_files_paired_with_comp.first;
+  if (src_files_paired_with_comp.second == "") {
+    std::cerr << "Please generate compile-commands.json before usage" << std::endl;
+    return 1;
+  }
 
-  for (std::string file: listFilesInDirectory(argv[1])) {
+  auto include_paths = read_include_paths(src_files_paired_with_comp.second);
+  for (std::string file: files) {
+    std::cerr << file << "\n";
     char** argv_custom = new char*[3];
-    std::string ma = "move-adder";
+    std::string ma = argv[0];
     argv_custom[0] = new char[ma.length() + 1];
     strcpy(argv_custom[0], ma.c_str());
 
@@ -303,9 +364,10 @@ int main(int argc, const char **argv) {
 
     int argc = 3;
 
-    const char** new_argv = (const char**) argv_custom;
+    std::pair<char**, int> new_argv_info = concat_ptr(std::make_pair(argv_custom, argc), include_paths);
 
-    auto ExpectedParser = CommonOptionsParser::create(argc, new_argv, MyToolCategory);
+    const char** new_argv = (const char**) new_argv_info.first;
+    auto ExpectedParser = CommonOptionsParser::create(new_argv_info.second, new_argv, MyToolCategory);
     if (!ExpectedParser) {
       // Fail gracefully for unsupported options.
       llvm::errs() << ExpectedParser.takeError();
