@@ -451,8 +451,7 @@ int main(int argc, const char **argv) {
     Finder.addMatcher(CopyConstructionMatcher, &Handler);
     Finder.addMatcher(CopyAssignmentMatcher, &Handler);
     if (Tool.run(newFrontendActionFactory(&Finder).get())) {
-      // llvm::errs() << ...
-      return 1;
+      std::cerr << "error with parsing file" << std::endl;
     }
 
     movables.insert(movables.end(), Handler.movables.begin(), Handler.movables.end());
