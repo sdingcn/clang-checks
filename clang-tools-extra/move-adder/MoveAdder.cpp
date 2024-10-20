@@ -74,9 +74,13 @@ std::pair<std::string, std::pair<int, int>> getMoveLoc(
 ) {
   FullSourceLoc Loc = Ctx->getFullLoc(VarRef->getBeginLoc());
   if (Loc.isValid()) {
-    auto FName = Loc.getFileEntry()->tryGetRealPathName().str();
-    auto FPos = std::make_pair(Loc.getSpellingLineNumber(), Loc.getSpellingColumnNumber());
-    return std::make_pair(FName, FPos);
+    if (Loc.getFileEntry() != nullptr) {
+      auto FName = Loc.getFileEntry()->tryGetRealPathName().str();
+      auto FPos = std::make_pair(Loc.getSpellingLineNumber(), Loc.getSpellingColumnNumber());
+      return std::make_pair(FName, FPos);
+    } else {
+      return std::make_pair("N/A", std::make_pair(-1, -1));
+    }
   } else {
     return std::make_pair("N/A", std::make_pair(-1, -1));
   }
@@ -302,19 +306,26 @@ std::string getCommand(std::string val) {
   return val.substr(i, val.size());
 }
 
-std::pair<char**, int> read_include_paths(std::string compile_commands_json) {
+std::string make_absolute(std::string file, std::string directory) {
+  std::filesystem::path filepath(file);
+  std::filesystem::path dirpath(directory);
+  if (filepath.is_absolute()) {
+    return filepath;
+  } 
+
+  return std::filesystem::absolute(dirpath/filepath);
+} 
+
+std::vector<std::string> read_include_paths(std::string compile_commands_json) {
   std::ifstream f(compile_commands_json);
   json data = json::parse(f);
-  char** out = new char*[data.size()]; 
-  std::cerr << data.size() << std::endl;
-  int i = 0;
+  std::vector<std::string> out;
   for (auto iter = data.items().begin(); iter != data.items().end(); iter++) {
-    std::string cmd = getCommand((iter).value()["command"]);
-    out[i] = new char[cmd.size() + 1];
-    strcpy(out[i], cmd.c_str());
-    i++;
+    std::string dir = (iter).value()["directory"];
+    std::string fpath = (iter).value()["file"];
+    out.push_back(make_absolute(fpath, dir));
   }
-  return std::make_pair(out, i + 1);
+  return out;
 }
 
 std::pair<char**, int> concat_ptr(std::pair<char**, int> ptr1, std::pair<char**, int> ptr2) {
@@ -324,7 +335,7 @@ std::pair<char**, int> concat_ptr(std::pair<char**, int> ptr1, std::pair<char**,
   }
 
   for (int i = ptr1.second; i < ptr2.second + ptr1.second; i++) {
-    retVal[i] = ptr1.first[i];
+    retVal[i] = ptr2.first[i - ptr1.second];
   }
 
   return std::make_pair(retVal, ptr1.second + ptr2.second);
@@ -334,7 +345,7 @@ int main(int argc, const char **argv) {
   int parserArgc = argc - 1;
 
   if (argc != 3) {
-    std::cerr << "usage: move-adder <directory> --" << std::endl;
+    std::cerr << "usage: move-adder <path-to-build-directory> --" << std::endl;
     return 1;
   }
 
@@ -347,27 +358,31 @@ int main(int argc, const char **argv) {
   }
 
   auto include_paths = read_include_paths(src_files_paired_with_comp.second);
-  for (std::string file: files) {
+  // include_paths.clear();
+  // include_paths.push_back("/Users/vidurmodgil/Desktop/Data/School/College/research/opencv/modules/imgcodecs/test/test_jpeg.cpp");
+  for (std::string file: include_paths) {
     std::cerr << file << "\n";
-    char** argv_custom = new char*[3];
+    int argc = 4;
+    char** argv_custom = new char*[argc];
+
     std::string ma = argv[0];
     argv_custom[0] = new char[ma.length() + 1];
     strcpy(argv_custom[0], ma.c_str());
 
-    argv_custom[1] = new char[file.length() + 1];
-    strcpy(argv_custom[1], file.c_str());
+    std::string dash = "-p";
+    argv_custom[1] = new char[dash.length() + 1];
+    strcpy(argv_custom[1], dash.c_str());
 
-    std::string dash = "--";
-    argv_custom[2] = new char[dash.length() + 1];
-    strcpy(argv_custom[2], dash.c_str());
+    std::string build_path = argv[1];
+    argv_custom[2] = new char[build_path.length() + 1];
+    strcpy(argv_custom[2], build_path.c_str());
+
+    argv_custom[3] = new char[file.length() + 1];
+    strcpy(argv_custom[3], file.c_str());
 
 
-    int argc = 3;
-
-    std::pair<char**, int> new_argv_info = concat_ptr(std::make_pair(argv_custom, argc), include_paths);
-
-    const char** new_argv = (const char**) new_argv_info.first;
-    auto ExpectedParser = CommonOptionsParser::create(new_argv_info.second, new_argv, MyToolCategory);
+    const char** new_argv = (const char**) argv_custom;
+    auto ExpectedParser = CommonOptionsParser::create(argc, new_argv, MyToolCategory);
     if (!ExpectedParser) {
       // Fail gracefully for unsupported options.
       llvm::errs() << ExpectedParser.takeError();
@@ -442,6 +457,5 @@ int main(int argc, const char **argv) {
 
     movables.insert(movables.end(), Handler.movables.begin(), Handler.movables.end());
   }
-
   // selectMoves(movables, argv[argc - 1]);
 }
