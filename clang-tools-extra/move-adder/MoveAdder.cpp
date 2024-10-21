@@ -25,6 +25,38 @@
 #include <cstring>
 #include <nlohmann/json.hpp>
 
+
+#ifdef _WIN32
+#include <windows.h>
+
+bool isFileEditable(const std::string& filePath) {
+    DWORD attributes = GetFileAttributes(filePath.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+        std::cerr << "Error getting file attributes: " << GetLastError() << std::endl;
+        return false; // File does not exist or other error
+    }
+
+    // Check if the file is not read-only
+    return !(attributes & FILE_ATTRIBUTE_READONLY);
+}
+
+#else // Assume Linux or other Unix-like system
+#include <sys/stat.h>
+
+bool isFileEditable(const std::string& filePath) {
+    struct stat fileInfo;
+
+    if (stat(filePath.c_str(), &fileInfo) != 0) {
+        std::cerr << "Error getting file status." << std::endl;
+        return false; // File does not exist or other error
+    }
+
+    // Check if the file is writable by the owner
+    return (fileInfo.st_mode & S_IWUSR) != 0; // Check owner's write permission
+}
+
+#endif
+
 using namespace clang;
 using namespace clang::tooling;
 using namespace clang::ast_matchers;
@@ -148,24 +180,21 @@ public:
   std::vector<MoveInfo> movables;
 };
 
-/*
----
-for file in files.keys():
-  std::vector<VarRef> Moves = files[file]
-  Rewriter(File)
-  applyRewrites(all moves in file)
-  write to file
-*/
 
-void applyMoves(const std::vector<MoveInfo> &movables) {
+void applyMoves(const std::vector<MoveInfo> &movables, std::string buildPath) {
   // Maps file names/line numbers to move locations
   std::map<std::string,
     std::map<int, std::vector<std::pair<int, int>>>
   > M;
   for (auto &m : movables) {
-    // cppreference: [] inserts value_type(key, T()) if the key does not exist.
-    M[m.File][m.Loc.first].push_back(std::make_pair(m.Loc.second, m.varName.size()));
+    if (isFileEditable(m.File)) {
+      // cppreference: [] inserts value_type(key, T()) if the key does not exist.
+      M[m.File][m.Loc.first].push_back(std::make_pair(m.Loc.second, m.varName.size()));
+    }
   }
+
+  std::cout << "size: " << M.size() << std::endl;
+  std::cerr << "started sort" << std::endl;
   for (auto &p1 : M) {
     for (auto &p2 : p1.second) {
       std::sort(p2.second.begin(), p2.second.end(),
@@ -175,28 +204,49 @@ void applyMoves(const std::vector<MoveInfo> &movables) {
       );
     }
   }
+
+  std::cerr << "ended sort" << std::endl;
   for (auto &p1 : M) {
     std::string fname = p1.first;
+    std::cerr << fname << std::endl;
     std::fstream fs(fname, std::ios::in | std::ios::out);
+    if (!fs) {
+      continue;
+    } 
     std::vector<std::string> lines;
     std::string line;
     while (getline(fs, line)) {
-      lines.push_back(line);
+      if (fs.fail()) {
+        std::cerr << "Failed to read file" << std::endl;
+        continue;
+      }
+      lines.push_back(line); // currently not getting file
     }
+    std::cerr << "finished instream" << std::endl;
+    std::cerr << fname << std::endl;
     for (auto &p2 : p1.second) {
-      int line = p2.first;
+      int line = p2.first - 1;
       for (auto &p3 : p2.second) {
         int column = p3.first;
         int varLen = p3.second;
         int endPos = column + varLen;
-        lines[line].insert(endPos, ")");
-        lines[line].insert(column, "std::move(");
+        std::cerr << "line num: " << line << std::endl;
+        std::cerr << "endPos: " << endPos << std::endl;
+        std::cerr << lines.size() << std::endl;
+        if (line != -1) {
+          lines[line].insert(endPos, ")");
+          lines[line].insert(column, "std::move(");
+        }
       }
     }
+
+    std::cerr << "finished building output" << std::endl;
     fs << "#include <utility> \n";
     for (auto &l : lines) {
       fs << l << '\n';
     }
+
+    std::cerr << "finished applying output" << std::endl;
   }
 /*
   for (auto moveable = movables.begin(); moveable < movables.end(); moveable++) {
@@ -242,9 +292,11 @@ bool hasGit(std::string path) {
   return std::filesystem::exists(path + "/.git");
 }
 
-void selectMoves(std::vector<MoveInfo> movables, std::string testCmd) {
+void selectMoves(std::vector<MoveInfo> movables, std::string testCmd, std::string buildPath) {
   // first try all moves
-  applyMoves(movables);
+  std::cerr << "started" << std::endl;
+  std::filesystem::current_path(buildPath);
+  applyMoves(movables, buildPath);
   time_t bestTime = callTest(testCmd);
   std::vector<MoveInfo> bestMoves = movables;
   resetMoves(movables);
@@ -256,7 +308,7 @@ void selectMoves(std::vector<MoveInfo> movables, std::string testCmd) {
       auto rng = std::default_random_engine {};
       std::shuffle(std::begin(movables), std::end(movables), rng);
       newMovables = std::vector<MoveInfo>(movables.begin(), movables.begin() + movables.size() / 2);
-      applyMoves(newMovables);
+      applyMoves(newMovables, buildPath);
       system("make -j8");
       time_t time = callTest(testCmd);
       resetMoves(newMovables);
@@ -456,5 +508,6 @@ int main(int argc, const char **argv) {
 
     movables.insert(movables.end(), Handler.movables.begin(), Handler.movables.end());
   }
-  // selectMoves(movables, argv[argc - 1]);
+  
+  selectMoves(movables, argv[2], argv[1]);
 }
