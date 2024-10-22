@@ -227,7 +227,7 @@ void applyMoves(const std::vector<MoveInfo> &movables, std::string buildPath) {
     for (auto &p2 : p1.second) {
       int line = p2.first - 1;
       for (auto &p3 : p2.second) {
-        int column = p3.first;
+        int column = p3.first - 1;
         int varLen = p3.second;
         int endPos = column + varLen;
         std::cerr << "line num: " << line << std::endl;
@@ -236,6 +236,7 @@ void applyMoves(const std::vector<MoveInfo> &movables, std::string buildPath) {
         if (line != -1) {
           lines[line].insert(endPos, ")");
           lines[line].insert(column, "std::move(");
+          std::cout << lines[line] << std::endl;
         }
       }
     }
