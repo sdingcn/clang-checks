@@ -1,13 +1,12 @@
 # clang-checks
 
 This repository contains two C++ checks based on clang.
-The following commands build both checks.
 
 ```
 mkdir build
 cd build
 cmake -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" -DCMAKE_BUILD_TYPE=Release -G "Unix Makefiles" ../llvm
-make -j8
+make -j8 <target>
 ```
 
 ## move-adder

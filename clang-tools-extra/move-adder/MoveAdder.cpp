@@ -25,6 +25,7 @@
 #include <cstring>
 #include <nlohmann/json.hpp>
 
+#define PRINT(x) llvm::errs() << "[LINE " << std::to_string(__LINE__) << "] " << (x) << "\n"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -225,18 +226,18 @@ void applyMoves(const std::vector<MoveInfo> &movables, std::string buildPath) {
     std::cerr << "finished instream" << std::endl;
     std::cerr << fname << std::endl;
     for (auto &p2 : p1.second) {
-      int line = p2.first - 1;
+      int lineno = p2.first - 1;
       for (auto &p3 : p2.second) {
         int column = p3.first - 1;
         int varLen = p3.second;
         int endPos = column + varLen;
-        std::cerr << "line num: " << line << std::endl;
+        std::cerr << "line num: " << lineno << std::endl;
         std::cerr << "endPos: " << endPos << std::endl;
         std::cerr << lines.size() << std::endl;
-        if (line != -1) {
-          lines[line].insert(endPos, ")");
-          lines[line].insert(column, "std::move(");
-          std::cout << lines[line] << std::endl;
+        if (lineno != -1) {
+          lines[lineno].insert(endPos, ")");
+          lines[lineno].insert(column, "std::move(");
+          std::cout << lines[lineno] << std::endl;
         }
       }
     }
@@ -271,18 +272,20 @@ void applyMoves(const std::vector<MoveInfo> &movables, std::string buildPath) {
 */
 }
 
-void resetMoves(const std::vector<MoveInfo> &movables) {
-  // TOOD initialize git repo in concept-synth
-  system("git restore .");
+void resetMoves(const std::string &buildPath) {
+  auto projectPath = std::filesystem::path(buildPath) / std::filesystem::path("..");
+  auto gitCmd = "git -C " + projectPath.string() + " restore .";
+  std::system(gitCmd.c_str());
 }
 
-time_t callTest(std::string testCmd) {
-  // TODO: re-compile the project
+time_t callTest(std::string testCmd, const std::string &buildPath) {
+  auto buildCmd = "make -C " + buildPath + " -j8";
+  std::system(buildCmd.c_str());
   time_t diff = 0;
   for (int i = 0; i < 3; i++) {
     time_t start, end; 
     time(&start);
-    system(testCmd.c_str());
+    std::system(testCmd.c_str());
     time(&end);
     diff += end - start;
   }
@@ -296,11 +299,10 @@ bool hasGit(std::string path) {
 void selectMoves(std::vector<MoveInfo> movables, std::string testCmd, std::string buildPath) {
   // first try all moves
   std::cerr << "started" << std::endl;
-  std::filesystem::current_path(buildPath);
   applyMoves(movables, buildPath);
-  time_t bestTime = callTest(testCmd);
+  time_t bestTime = callTest(testCmd, buildPath);
   std::vector<MoveInfo> bestMoves = movables;
-  resetMoves(movables);
+  resetMoves(buildPath);
   // try binary cut
   int N = std::log(static_cast<double>(movables.size())) / std::log(2.0);
   for (int i = 0; i < N; i++) {
@@ -310,16 +312,15 @@ void selectMoves(std::vector<MoveInfo> movables, std::string testCmd, std::strin
       std::shuffle(std::begin(movables), std::end(movables), rng);
       newMovables = std::vector<MoveInfo>(movables.begin(), movables.begin() + movables.size() / 2);
       applyMoves(newMovables, buildPath);
-      system("make -j8");
-      time_t time = callTest(testCmd);
-      resetMoves(newMovables);
+      time_t time = callTest(testCmd, buildPath);
+      resetMoves(buildPath);
       if (time < bestTime) { // TODO: change to significantlly smaller?
         break;
       }
     }
     movables = newMovables;
   }
-  // print the results?
+  // TODO: print the "most effective" movable locations?
   // for (auto m : movables) { ... }
 }
 
@@ -398,7 +399,7 @@ int main(int argc, const char **argv) {
   int parserArgc = argc - 1;
 
   if (argc != 3) {
-    std::cerr << "usage: move-adder <path-to-build-directory> --" << std::endl;
+    std::cerr << "usage: move-adder <path-to-build-directory> <test-command>" << std::endl;
     return 1;
   }
 
