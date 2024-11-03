@@ -372,8 +372,13 @@ std::string make_absolute(std::string file, std::string directory) {
 
 std::vector<std::string> read_include_paths(std::string compile_commands_json) {
   std::ifstream f(compile_commands_json);
-  json data = json::parse(f);
   std::vector<std::string> out;
+
+  if (!f) {
+    out.push_back("invalid file");
+    return out;
+  }
+  json data = json::parse(f);
   for (auto iter = data.items().begin(); iter != data.items().end(); iter++) {
     std::string dir = (iter).value()["directory"];
     std::string fpath = (iter).value()["file"];
@@ -398,24 +403,24 @@ std::pair<char**, int> concat_ptr(std::pair<char**, int> ptr1, std::pair<char**,
 int main(int argc, const char **argv) {
   int parserArgc = argc - 1;
 
-  if (argc != 3) {
-    std::cerr << "usage: move-adder <path-to-build-directory> <test-command>" << std::endl;
+  if (argc != 4) {
+    std::cerr << "usage: move-adder <path to compile-commands.json> <test-command> <path-to-build-dir>" << std::endl;
     return 1;
   }
 
   std::vector<MoveInfo> movables;
-  auto src_files_paired_with_comp = listFilesInDirectory(argv[1]);
-  auto files = src_files_paired_with_comp.first;
-  if (src_files_paired_with_comp.second == "") {
-    std::cerr << "Please generate compile-commands.json before usage" << std::endl;
+  auto include_paths = read_include_paths(argv[1]);
+  if (include_paths[0] == "invalid file") {
+    std::cerr << "arg1 must be a filepath" << std::endl;
     return 1;
   }
-
-  auto include_paths = read_include_paths(src_files_paired_with_comp.second);
-  // include_paths.clear();
-  // include_paths.push_back("/Users/vidurmodgil/Desktop/Data/School/College/research/opencv/modules/imgcodecs/test/test_jpeg.cpp");
-  for (std::string file: include_paths) {
-    std::cerr << file << "\n";
+  include_paths.clear();
+  include_paths.push_back("/nethome/vmodgil3/opencv/modules/gapi/src/backends/cpu/gcpustereo.cpp");
+  long move_err = 0;
+  long move_good = 0;
+  for (int i = 0; i < include_paths.size(); i++) {
+    std::string file = include_paths[i];
+    std::cerr << "file: "<< file << " at " << i << "\n";
     int argc = 4;
     char** argv_custom = new char*[argc];
 
@@ -505,11 +510,18 @@ int main(int argc, const char **argv) {
     Finder.addMatcher(CopyConstructionMatcher, &Handler);
     Finder.addMatcher(CopyAssignmentMatcher, &Handler);
     if (Tool.run(newFrontendActionFactory(&Finder).get())) {
-      std::cerr << "error with parsing file" << std::endl;
+      std::cerr << "error in file" << std::endl;
+      move_err++;
+    } else {
+      move_good++;
     }
 
     movables.insert(movables.end(), Handler.movables.begin(), Handler.movables.end());
+    std::cerr << "Good file count: " << move_good << std::endl;
+    std::cerr << "Bad file count: " << move_err << std::endl;
+
+    // std::cerr << Handler.movables.size() << " new moves found: " << file << std::endl; 
+    std::cerr << movables.size() << " total moves found" << std::endl; 
   }
-  
-  selectMoves(movables, argv[2], argv[1]);
+  // selectMoves(movables, argv[2], argv[3]);
 }
