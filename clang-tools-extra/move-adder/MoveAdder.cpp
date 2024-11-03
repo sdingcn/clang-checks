@@ -168,6 +168,7 @@ public:
     const auto *VarRef = Result.Nodes.getNodeAs<DeclRefExpr>("node[variable]");
     auto Ctx = Result.Context;
     if (hasNonTrivialClass(VarRef) && isMovable(Fun, VarRef, Ctx)) {
+      Ctx->getSourceManager().getDiagnostics().setSuppressAllDiagnostics(true);
       auto FileAndLoc = getMoveLoc(VarRef, Ctx);
       movables.push_back(MoveInfo{FileAndLoc.first, FileAndLoc.second, VarRef->getNameInfo().getAsString()});
       // llvm::outs() << "[MoveAdder]: Variable "
@@ -399,19 +400,17 @@ int main(int argc, const char **argv) {
   int parserArgc = argc - 1;
 
   if (argc != 3) {
-    std::cerr << "usage: move-adder <path-to-build-directory> <test-command>" << std::endl;
+    std::cerr << "usage: move-adder <path to compile-commands.json> <test-command>" << std::endl;
     return 1;
   }
 
   std::vector<MoveInfo> movables;
-  auto src_files_paired_with_comp = listFilesInDirectory(argv[1]);
-  auto files = src_files_paired_with_comp.first;
-  if (src_files_paired_with_comp.second == "") {
-    std::cerr << "Please generate compile-commands.json before usage" << std::endl;
+  auto include_paths = read_include_paths(argv[1]);
+  if (include_paths[0] == "invalid file") {
+    std::cerr << "arg1 must be a filepath" << std::endl;
     return 1;
   }
 
-  auto include_paths = read_include_paths(src_files_paired_with_comp.second);
   // include_paths.clear();
   // include_paths.push_back("/Users/vidurmodgil/Desktop/Data/School/College/research/opencv/modules/imgcodecs/test/test_jpeg.cpp");
   for (std::string file: include_paths) {

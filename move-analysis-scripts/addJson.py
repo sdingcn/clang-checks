@@ -10,7 +10,6 @@ commands = [
     "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks"
 ]
 
-
 if (__name__ == "__main__"):
     if (len(sys.argv) != 2):
         print("usage: python3 addJson <path-to-compile-comands.json>")
