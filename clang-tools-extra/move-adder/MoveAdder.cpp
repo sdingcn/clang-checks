@@ -414,8 +414,8 @@ int main(int argc, const char **argv) {
     std::cerr << "arg1 must be a filepath" << std::endl;
     return 1;
   }
-  include_paths.clear();
-  include_paths.push_back("/nethome/vmodgil3/opencv/modules/gapi/src/backends/cpu/gcpustereo.cpp");
+  // include_paths.clear();
+  // include_paths.push_back("/nethome/vmodgil3/opencv/modules/gapi/src/backends/cpu/gcpustereo.cpp");
   long move_err = 0;
   long move_good = 0;
   for (int i = 0; i < include_paths.size(); i++) {
