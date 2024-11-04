@@ -2,12 +2,13 @@ from json import loads, dumps
 import sys
 
 commands = [
+    "/opt/homebrew/opt/llvm@17/bin/../include/c++/v1",
+    "/opt/homebrew/Cellar/llvm@17/17.0.6/lib/clang/17/include",
+    "/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk/usr/include",
+    "/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk/System/Library/Frameworks"
     "/usr/local/include",
-    "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1",
-    "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/15.0.0/include",
-    "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include",
-    "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include",
-    "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks"
+    "/usr/include/x86_64-linux-gnu",
+    "/usr/include"
 ]
 
 if (__name__ == "__main__"):
@@ -19,7 +20,7 @@ if (__name__ == "__main__"):
         jsonInfo = loads(f.read())
     for j in jsonInfo:
         for c in commands:
-            j["command"] += f" -I{c}"
+            j["command"] += " -I" + c
     
     with open(path, 'w') as f:
         f.write(dumps(jsonInfo))
