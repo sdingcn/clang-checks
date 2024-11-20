@@ -1,15 +1,30 @@
 from json import loads, dumps
 import sys
+import subprocess
 
-commands = [
-    "/opt/homebrew/opt/llvm@17/bin/../include/c++/v1",
-    "/opt/homebrew/Cellar/llvm@17/17.0.6/lib/clang/17/include",
-    "/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk/usr/include",
-    "/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk/System/Library/Frameworks"
-    "/usr/local/include",
-    "/usr/include/x86_64-linux-gnu",
-    "/usr/include"
-]
+def execute(cmd, i):
+    result = subprocess.run(
+        cmd,
+        text = True,
+        input = i,
+        capture_output = True
+    )
+    return (result.returncode, result.stdout, result.stderr)
+
+def get_search_paths():
+    _, out, err = execute(["clang++", "-x", "c++", "-o", "temp.out", "-v", "-w", "-"], "int main() {}")
+    lines = err.splitlines()
+    search_paths = []
+    inlist = False
+    for line in lines:
+        if line.startswith("#include <...> search starts here:"):
+            inlist = True
+        elif line.startswith("End of search list."):
+            inlist = False
+        else:
+            if inlist:
+                search_paths.append(line.split()[0])
+    return search_paths
 
 if (__name__ == "__main__"):
     if (len(sys.argv) != 2):
@@ -18,9 +33,10 @@ if (__name__ == "__main__"):
     path = sys.argv[1]
     with open(path) as f:
         jsonInfo = loads(f.read())
+    search_paths = get_search_paths()
     for j in jsonInfo:
-        for c in commands:
-            j["command"] += " -I" + c
+        for p in search_paths:
+            j["command"] += " -I" + p
     
     with open(path, 'w') as f:
         f.write(dumps(jsonInfo))
