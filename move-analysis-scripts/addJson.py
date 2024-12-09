@@ -26,6 +26,13 @@ def get_search_paths():
                 search_paths.append(line.split()[0])
     return search_paths
 
+def get_target():
+    _, out, err = execute(["clang++", "--version"], "")
+    lines = out.splitlines()
+    for line in lines:
+        if line.startswith("Target:"):
+            return line[7:].strip()
+
 if (__name__ == "__main__"):
     if (len(sys.argv) != 2):
         print("usage: python3 addJson <path-to-compile-comands.json>")
@@ -34,9 +41,11 @@ if (__name__ == "__main__"):
     with open(path) as f:
         jsonInfo = loads(f.read())
     search_paths = get_search_paths()
+    target = get_target()
     for j in jsonInfo:
         for p in search_paths:
             j["command"] += " -I" + p
+        j["command"] += " -target " + target
     
     with open(path, 'w') as f:
         f.write(dumps(jsonInfo))

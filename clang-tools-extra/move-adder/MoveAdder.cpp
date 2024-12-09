@@ -22,6 +22,7 @@
 #include <random>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <cstring>
 #include <nlohmann/json.hpp>
 
@@ -152,6 +153,13 @@ struct MoveInfo {
   std::string File;
   std::pair<int, int> Loc;
   std::string varName;
+  std::string toString() const {
+      std::ostringstream out;
+      out << File << ":"
+          << "(" << Loc.first << ", " << Loc.second << "):"
+          << varName;
+      return out.str();
+  }
 };
 
 class CopyHandler : public MatchFinder::MatchCallback {
@@ -296,13 +304,15 @@ bool hasGit(std::string path) {
   return std::filesystem::exists(path + "/.git");
 }
 
-void selectMoves(std::vector<MoveInfo> movables, std::string testCmd, std::string buildPath, std::string buildCmd) {
-  // first try all moves
+std::vector<MoveInfo> selectMoves(
+    std::vector<MoveInfo> movables, std::string testCmd, std::string buildPath, std::string buildCmd
+) {
+  // first try the original time
   std::cerr << "started" << std::endl;
-  applyMoves(movables, buildPath);
-  time_t bestTime = callTest(testCmd, buildCmd);
-  std::vector<MoveInfo> bestMoves = movables;
-  resetMoves(buildPath);
+  // applyMoves(movables, buildPath);
+  time_t originalTime = callTest(testCmd, buildCmd);
+  // std::vector<MoveInfo> bestMoves = movables;
+  // resetMoves(buildPath);
   // try binary cut
   int N = std::log(static_cast<double>(movables.size())) / std::log(2.0);
   for (int i = 0; i < N; i++) {
@@ -314,16 +324,16 @@ void selectMoves(std::vector<MoveInfo> movables, std::string testCmd, std::strin
       applyMoves(newMovables, buildPath);
       time_t time = callTest(testCmd, buildPath);
       resetMoves(buildPath);
-      if (time < bestTime) { // TODO: change to significantlly smaller?
+      if (time < originalTime) { // TODO: change to significantlly smaller?
         break;
       }
     }
     movables = newMovables;
   }
-  // TODO: print the "most effective" movable locations?
-  // for (auto m : movables) { ... }
+  return movables;
 }
 
+#if 0
 std::pair<std::vector<std::string>, std::string> listFilesInDirectory(const std::string& directoryPath) {
     std::vector<std::string> filePaths;
     std::string compile_commands_json = "";
@@ -343,7 +353,9 @@ std::pair<std::vector<std::string>, std::string> listFilesInDirectory(const std:
 
     return std::make_pair(filePaths, compile_commands_json);
 }
+#endif
 
+#if 0
 std::string getCommand(std::string val) {
   int i = 0;
   if (val.size() == 0) {
@@ -359,6 +371,7 @@ std::string getCommand(std::string val) {
   }
   return val.substr(i, val.size());
 }
+#endif
 
 std::string make_absolute(std::string file, std::string directory) {
   std::filesystem::path filepath(file);
@@ -387,6 +400,7 @@ std::vector<std::string> read_include_paths(std::string compile_commands_json) {
   return out;
 }
 
+#if 0
 std::pair<char**, int> concat_ptr(std::pair<char**, int> ptr1, std::pair<char**, int> ptr2) {
   char** retVal = new char*[ptr1.second + ptr2.second];
   for (int i = 0; i < ptr1.second; i++) {
@@ -399,6 +413,7 @@ std::pair<char**, int> concat_ptr(std::pair<char**, int> ptr1, std::pair<char**,
 
   return std::make_pair(retVal, ptr1.second + ptr2.second);
 }
+#endif
 
 int main(int argc, const char **argv) {
   int parserArgc = argc - 1;
@@ -523,5 +538,8 @@ int main(int argc, const char **argv) {
     // std::cerr << Handler.movables.size() << " new moves found: " << file << std::endl; 
     std::cerr << movables.size() << " total moves found" << std::endl; 
   }
-  selectMoves(movables, argv[2], argv[3], argv[4]);
+  auto moves = selectMoves(std::move(movables), argv[2], argv[3], argv[4]);
+  for (auto &m : moves) {
+      std::cout << m.toString() << std::endl;
+  }
 }
