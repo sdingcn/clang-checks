@@ -4,3 +4,6 @@
 [submodule "move-analysis-scripts/opencv"]
 	path = move-analysis-scripts/opencv
 	url = https://github.com/opencv/opencv
+[submodule "move-analysis-scripts/protobuf"]
+	path = move-analysis-scripts/protobuf
+	url = https://github.com/protocolbuffers/protobuf
