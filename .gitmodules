@@ -1,3 +1,6 @@
 [submodule "clang-tools-extra/move-adder/json"]
 	path = clang-tools-extra/move-adder/json
 	url = https://github.com/nlohmann/json
+[submodule "move-analysis-scripts/opencv"]
+	path = move-analysis-scripts/opencv
+	url = https://github.com/opencv/opencv
