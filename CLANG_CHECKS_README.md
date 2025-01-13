@@ -42,7 +42,7 @@ to generate the corresponding `compile_commands.json` file.
 Then use the following command to run the check
 on the entire C++ project.
 ```
-python3 move-analysis-scripts/run-on-cmake-project.py <path-to-the-build-folder-of-the-C++-project>
+move-analysis-scripts/run.sh <path to compile-commands.json> <test-command> <path-to-build-dir> <build-command>
 ```
 
 ## concept-synthesizer
