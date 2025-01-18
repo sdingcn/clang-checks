@@ -191,7 +191,7 @@ public:
 };
 
 
-void applyMoves(const std::vector<MoveInfo> &movables, std::string buildPath) {
+void applyMoves(const std::vector<MoveInfo> &movables) {
   // Maps file names/line numbers to move locations
   std::map<std::string,
     std::map<int, std::vector<std::pair<int, int>>>
@@ -309,7 +309,7 @@ std::vector<MoveInfo> selectMoves(
 ) {
   // first try the original time
   std::cerr << "started" << std::endl;
-  // applyMoves(movables, buildPath);
+  // applyMoves(movables);
   time_t originalTime = callTest(testCmd, buildCmd);
   // std::vector<MoveInfo> bestMoves = movables;
   // resetMoves(buildPath);
@@ -321,8 +321,8 @@ std::vector<MoveInfo> selectMoves(
       auto rng = std::default_random_engine {};
       std::shuffle(std::begin(movables), std::end(movables), rng);
       newMovables = std::vector<MoveInfo>(movables.begin(), movables.begin() + movables.size() / 2);
-      applyMoves(newMovables, buildPath);
-      time_t time = callTest(testCmd, buildPath);
+      applyMoves(newMovables);
+      time_t time = callTest(testCmd, buildCmd);
       resetMoves(buildPath);
       if (time < originalTime) { // TODO: change to significantlly smaller?
         break;
