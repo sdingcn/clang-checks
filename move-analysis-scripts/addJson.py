@@ -46,6 +46,7 @@ if (__name__ == "__main__"):
         for p in search_paths:
             j["command"] += " -I" + p
         j["command"] += " -target " + target
+        j["command"] += " -Wno-error=implicit-function-declaration"
     
     with open(path, 'w') as f:
         f.write(dumps(jsonInfo))
